@@ -22,6 +22,7 @@ from middleware.feedback import FeedbackStore
 from middleware.auth import get_current_user
 from middleware.webhook_handler import handle_push, handle_issue_event, handle_pr_event
 from utils.logging_config import setup_logging
+from utils.validators import validate_session_id
 from settings import settings
 
 logger = setup_logging(__name__)
@@ -44,6 +45,13 @@ _SESSION_STATUS: dict[str, dict[str, Any]] = {}
 logger.info("Initializing SupportAgent...")
 agent: Any = SupportAgent()
 logger.info("SupportAgent initialized successfully.")
+
+# Startup security check
+env = os.getenv("ENV", "development").lower()
+if env == "production" and not settings.AUTH_ENABLED:
+    logger.critical(
+        "AUTH_ENABLED is False in production — this is a security risk"
+    )
 
 
 class QueryRequest(BaseModel):
@@ -135,6 +143,10 @@ async def solve_ticket(
         # Running our LangGraph State Machine
         logger.info("Solving ticket", extra={"query": request.user_query})
         session_id = x_session_id or request.session_id
+        if session_id:
+            session_id = validate_session_id(session_id)
+            if not session_id:
+                raise HTTPException(status_code=400, detail="Invalid session_id format")
         repo_name = request.repo_url or settings.TARGET_REPO or "this repository"
 
         # Enforce rate limit using authenticated user identity
@@ -283,6 +295,16 @@ def _index_code_chunks(
 
 
 def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str) -> None:
+    # Validate session_id to prevent path traversal
+    validated_session_id = validate_session_id(session_id)
+    if not validated_session_id:
+        logger.error(
+            "Invalid session_id in _prepare_repo_task",
+            extra={"session_id": session_id[:50]},
+        )
+        _set_status_ex(session_id, "error", "Invalid session_id format", percent=100)
+        return
+    session_id = validated_session_id
     try:
         # Overall progress weights — phases 3/4/5 run in parallel after phase 2.
         PHASES = {
@@ -413,6 +435,9 @@ async def prepare_repo(
     session_id = x_session_id or request.session_id
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
+    session_id = validate_session_id(session_id)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
 
     _set_status(session_id, "queued", "Repo preparation queued")
     background_tasks.add_task(_prepare_repo_task, request.repo_url, request.github_token, session_id)
@@ -429,6 +454,9 @@ async def get_status(session_id: str):
 
 @app.post("/v1/cleanup/{session_id}", dependencies=[Depends(get_current_user)])
 async def cleanup_session(session_id: str):
+    session_id = validate_session_id(session_id)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
     try:
         agent.cleanup_session(session_id)
         _SESSION_STATUS.pop(session_id, None)
