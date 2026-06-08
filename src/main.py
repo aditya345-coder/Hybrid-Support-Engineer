@@ -17,7 +17,7 @@ from ingestion.github_loader import GitHubGraphLoader
 from config import RAW_DOCS_DIR
 
 from agents.support_agent import SupportAgent
-from middleware.rate_limit import check_rate_limit
+from middleware.rate_limit import check_rate_limit, decrement_rate_limit
 from middleware.feedback import FeedbackStore
 from middleware.auth import get_current_user
 from middleware.webhook_handler import handle_push, handle_issue_event, handle_pr_event
@@ -203,6 +203,11 @@ async def solve_ticket(
             },
         }
     except Exception as e:
+        # Decrement rate limit counter on failure so quota isn't consumed
+        try:
+            decrement_rate_limit(agent.retriever.graph_store.driver, user_id)
+        except Exception:
+            logger.warning("Failed to decrement rate limit on error", extra={"user_id": user_id})
         logger.exception("Error while solving ticket")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -245,11 +250,14 @@ def _index_code_chunks(
     chunks: list,
     session_id: str,
     report: Callable,
+    vector_store: Any = None,
 ) -> None:
+    from database.vector_store import VectorStore
     from ingestion.code_indexer import CodeChunk
     from qdrant_client.models import Distance, VectorParams, PointStruct
 
-    vector_store = VectorStore()
+    if vector_store is None:
+        vector_store = VectorStore()
     collection_name = f"code_{session_id}" if session_id else "code_default"
 
     try:
@@ -394,7 +402,10 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
             report("indexing_code", 0, max(1, len(code_chunks)), f"Found {len(code_chunks)} code symbols")
 
             if code_chunks:
-                _index_code_chunks(code_chunks, session_id, report)
+                _index_code_chunks(
+                    code_chunks, session_id, report,
+                    vector_store=agent.retriever.vector_store,
+                )
 
         def _run_build_graph():
             report("building_graph", 0, 20, "Building Neo4j issue graph")
@@ -422,8 +433,8 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
 
         _set_status_ex(session_id, "complete", "Repository prepared", percent=100)
     except Exception as e:
-        logger.exception("Repo preparation failed", extra={"session_id": session_id, "repo": repo_url})
-        _set_status_ex(session_id, "error", str(e), percent=100)
+        logger.exception("Repo preparation failed", extra={"session_id": session_id, "error_type": type(e).__name__})
+        _set_status_ex(session_id, "error", "Repository preparation failed", percent=100)
 
 
 @app.post("/v1/prepare-repo", dependencies=[Depends(get_current_user)])
@@ -444,8 +455,14 @@ async def prepare_repo(
     return {"status": "processing", "metadata": {"session_id": session_id}}
 
 
-@app.get("/v1/status/{session_id}")
-async def get_status(session_id: str):
+@app.get("/v1/status/{session_id}", dependencies=[Depends(get_current_user)])
+async def get_status(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+):
+    session_id = validate_session_id(session_id)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
     status = _SESSION_STATUS.get(session_id)
     if not status:
         return {"status": "needs_ingestion", "metadata": {"session_id": session_id}}

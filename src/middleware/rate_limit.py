@@ -27,6 +27,10 @@ def check_rate_limit(driver: Driver, user_id: str, max_queries: int | None = Non
     
     try:
         with driver.session() as session:
+            # Note: We increment first, then check. This means the counter may overshoot
+            # when the limit is reached. This is acceptable because:
+            # 1. The decrement-on-error fix needs the increment to happen before the check
+            # 2. The overshoot is minimal (at most 1 request worth)
             result = session.run(
                 """
                 MERGE (r:RateLimit {user_id: $user_id, date: $date})
@@ -49,3 +53,31 @@ def check_rate_limit(driver: Driver, user_id: str, max_queries: int | None = Non
             _fallback_counts[key] = _fallback_counts.get(key, 0) + 1
             count = _fallback_counts[key]
         return count <= max_queries
+
+
+def decrement_rate_limit(driver: Driver, user_id: str) -> None:
+    """Decrement the rate limit counter (used when a request fails)."""
+    today = date.today().isoformat()
+    try:
+        with driver.session() as session:
+            session.run(
+                """
+                MERGE (r:RateLimit {user_id: $user_id, date: $date})
+                SET r.count = CASE
+                    WHEN r.count IS NULL OR r.count <= 0 THEN 0
+                    ELSE r.count - 1
+                END
+                """,
+                user_id=user_id,
+                date=today,
+            )
+    except Exception as e:
+        logger.warning(
+            "Rate limit decrement failed",
+            extra={"user_id": user_id, "error": str(e)},
+        )
+        # In-memory fallback
+        key = (user_id, today)
+        with _fallback_lock:
+            current = _fallback_counts.get(key, 0)
+            _fallback_counts[key] = max(0, current - 1)
