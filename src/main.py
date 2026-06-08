@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import Depends, FastAPI, HTTPException, Header, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Callable, cast
 
 from ingestion.docs_loader import DocsLoader
@@ -17,7 +17,7 @@ from ingestion.github_loader import GitHubGraphLoader
 from config import RAW_DOCS_DIR
 
 from agents.support_agent import SupportAgent
-from middleware.rate_limit import check_rate_limit, decrement_rate_limit
+from middleware.rate_limit import check_rate_limit, decrement_rate_limit, check_rate_limit_namespace
 from middleware.feedback import FeedbackStore
 from middleware.auth import get_current_user
 from middleware.webhook_handler import handle_push, handle_issue_event, handle_pr_event
@@ -32,8 +32,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.CORS_METHODS,
+    allow_headers=settings.CORS_HEADERS,
 )
 
 _feedback_store = FeedbackStore()
@@ -55,27 +55,27 @@ if env == "production" and not settings.AUTH_ENABLED:
 
 
 class QueryRequest(BaseModel):
-    user_query: str
+    user_query: str = Field(..., min_length=1, max_length=2000)
     # Optional session isolation key; can also be provided via `X-Session-Id` header.
-    session_id: str | None = None
+    session_id: str | None = Field(None, pattern=r"^[a-zA-Z0-9_-]{1,128}$")
     # Optional flags/plumbing for future roadmap items.
     allow_web_search: bool = False
-    repo_url: str | None = None
-    github_token: str | None = None
+    repo_url: str | None = Field(None, max_length=500)
+    github_token: str | None = Field(None, max_length=200)
 
 
 class PrepareRepoRequest(BaseModel):
-    repo_url: str
-    github_token: str | None = None
-    session_id: str
+    repo_url: str = Field(..., min_length=1, max_length=500)
+    github_token: str | None = Field(None, max_length=200)
+    session_id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 class FeedbackRequest(BaseModel):
-    query: str
-    answer: str
-    feature_detected: str = "General"
+    query: str = Field(..., min_length=1, max_length=2000)
+    answer: str = Field(..., min_length=1, max_length=5000)
+    feature_detected: str = Field("General", max_length=100)
     thumbs_up: bool
-    session_id: str
+    session_id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 @app.post("/webhook/github")
@@ -94,6 +94,10 @@ async def github_webhook(
             logger.warning("WEBHOOK_SECRET not configured - webhook authentication disabled")
             return JSONResponse(status_code=503, content={"detail": "Webhook authentication not configured"})
         else:
+            # Only allow bypass in development
+            if env == "production":
+                logger.critical("WEBHOOK_AUTH_DISABLED=true in production - refusing webhook (bypass not allowed)")
+                return JSONResponse(status_code=503, content={"detail": "Webhook authentication not configured"})
             logger.warning("WEBHOOK_SECRET not configured - authentication explicitly disabled via WEBHOOK_AUTH_DISABLED")
     else:
         signature_header = request.headers.get("X-Hub-Signature-256", "")
@@ -146,6 +150,7 @@ async def solve_ticket(
         if session_id:
             session_id = validate_session_id(session_id)
             if not session_id:
+                logger.warning("Invalid session_id format in header", extra={"session_id": x_session_id[:50] if x_session_id else None})
                 raise HTTPException(status_code=400, detail="Invalid session_id format")
         repo_name = request.repo_url or settings.TARGET_REPO or "this repository"
 
@@ -448,6 +453,7 @@ async def prepare_repo(
         raise HTTPException(status_code=400, detail="session_id is required")
     session_id = validate_session_id(session_id)
     if not session_id:
+        logger.warning("Invalid session_id format in header", extra={"session_id": x_session_id[:50] if x_session_id else None})
         raise HTTPException(status_code=400, detail="Invalid session_id format")
 
     _set_status(session_id, "queued", "Repo preparation queued")
@@ -470,10 +476,25 @@ async def get_status(
 
 
 @app.post("/v1/cleanup/{session_id}", dependencies=[Depends(get_current_user)])
-async def cleanup_session(session_id: str):
+async def cleanup_session(session_id: str, user: dict = Depends(get_current_user)):
     session_id = validate_session_id(session_id)
     if not session_id:
         raise HTTPException(status_code=400, detail="Invalid session_id format")
+    
+    # Rate limit cleanup operations (configurable, default 5 per day per user)
+    user_id = user.get("sub", "anonymous")
+    if not check_rate_limit_namespace(
+        agent.retriever.graph_store.driver, 
+        user_id, 
+        "cleanup", 
+        settings.CLEANUP_RATE_LIMIT
+    ):
+        logger.warning("Cleanup rate limit exceeded", extra={"user_id": user_id})
+        return JSONResponse(
+            status_code=429,
+            content={"detail": f"Daily cleanup limit of {settings.CLEANUP_RATE_LIMIT} reached. Try again tomorrow."},
+        )
+    
     try:
         agent.cleanup_session(session_id)
         _SESSION_STATUS.pop(session_id, None)
