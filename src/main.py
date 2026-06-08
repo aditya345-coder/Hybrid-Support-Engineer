@@ -258,7 +258,6 @@ def _index_code_chunks(
     vector_store: Any = None,
 ) -> None:
     from database.vector_store import VectorStore
-    from ingestion.code_indexer import CodeChunk
     from qdrant_client.models import Distance, VectorParams, PointStruct
 
     if vector_store is None:
@@ -382,7 +381,6 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
         chunks = docs_loader.load_and_split()
 
         # ── Phases 3/4/5: Index docs, index code, build graph (parallel) ──
-        parallel_base = phase_base["indexing_docs"]
 
         def _run_index_docs():
             report("indexing_docs", 0, max(1, len(chunks)), "Indexing docs into Qdrant")
