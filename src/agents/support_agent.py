@@ -1,7 +1,7 @@
 import os
 import re
 import sqlite3
-from typing import Annotated, TypedDict, List
+from typing import TypedDict, List
 
 from utils.logging_config import setup_logging
 from langgraph.graph import StateGraph, END
@@ -11,7 +11,6 @@ from agents.llm_gateway import LLMGateway
 from settings import settings
 from utils.validators import sanitize_llm_input
 
-from langgraph.pregel import Pregel
 from langgraph.checkpoint.memory import MemorySaver
 
 logger = setup_logging(__name__)
@@ -202,7 +201,7 @@ class SupportAgent:
 
     def rewrite_query(self, state: AgentState):
         """Rewrite vague queries into search-optimized technical queries."""
-        q = state["query"]
+        q = sanitize_llm_input(state["query"])
         prompt = (
             "Rewrite the following user question into a concise, technical, search-optimized query "
             "that would work well for semantic search over documentation and GitHub issues. "
@@ -302,7 +301,7 @@ class SupportAgent:
                 "https://api.tavily.com/search",
                 json={
                     "api_key": api_key,
-                    "query": state["query"],
+                    "query": sanitize_llm_input(state["query"]),
                     "max_results": 5,
                     "include_answer": False,
                     "include_raw_content": False,
