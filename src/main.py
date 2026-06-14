@@ -1,7 +1,12 @@
+import asyncio
 import hashlib
 import hmac
 import os
+import shutil
+import threading
 import time
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -17,6 +22,7 @@ from ingestion.github_loader import GitHubGraphLoader
 from config import RAW_DOCS_DIR
 
 from agents.support_agent import SupportAgent
+from database.redis_store import get_redis_store
 from middleware.rate_limit import check_rate_limit, decrement_rate_limit, check_rate_limit_namespace
 from middleware.feedback import FeedbackStore
 from middleware.auth import get_current_user
@@ -26,7 +32,37 @@ from utils.validators import validate_session_id
 from settings import settings
 
 logger = setup_logging(__name__)
-app = FastAPI(title="Hybrid Support Agent API")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: resume interrupted sessions + start periodic cleanup. Shutdown: nothing to do."""
+    running = await redis_store.get_running_sessions()
+    for session in running:
+        sid = session.get("session_id", "")
+        logger.info("Resuming interrupted session", extra={"session_id": sid})
+        repo_url = session.get("repo_url", "")
+        github_token = session.get("github_token") or settings.GITHUB_TOKEN
+        completed = session.get("completed_phases", [])
+        # Run in thread pool since _prepare_repo_task is sync
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor(None, _prepare_repo_task, repo_url, github_token, sid, completed)
+
+    # Start periodic orphan cleanup (every hour)
+    async def _periodic_cleanup():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await _cleanup_orphaned_sessions()
+            except Exception as e:
+                logger.warning("Periodic cleanup failed: %s", e)
+
+    cleanup_task = asyncio.create_task(_periodic_cleanup())
+    yield
+    cleanup_task.cancel()
+
+
+app = FastAPI(title="Hybrid Support Agent API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,9 +74,26 @@ app.add_middleware(
 
 _feedback_store = FeedbackStore()
 
-# In-memory ingestion status store.
-# For real SaaS, this should be persisted (e.g., Redis) and scoped per deployment.
-_SESSION_STATUS: dict[str, dict[str, Any]] = {}
+# Redis-backed session state store (replaces in-memory _SESSION_STATUS)
+redis_store = get_redis_store()
+
+# Per-session locks to prevent concurrent resume tasks
+_session_locks: dict[str, threading.Lock] = {}
+_session_locks_lock = threading.Lock()
+
+
+def _get_session_lock(session_id: str) -> threading.Lock:
+    """Get or create a lock for a specific session."""
+    with _session_locks_lock:
+        if session_id not in _session_locks:
+            _session_locks[session_id] = threading.Lock()
+        return _session_locks[session_id]
+
+
+def _release_session_lock(session_id: str) -> None:
+    """Release a session lock when done."""
+    with _session_locks_lock:
+        _session_locks.pop(session_id, None)
 
 logger.info("Initializing SupportAgent...")
 agent: Any = SupportAgent()
@@ -75,6 +128,10 @@ class FeedbackRequest(BaseModel):
     answer: str = Field(..., min_length=1, max_length=5000)
     feature_detected: str = Field("General", max_length=100)
     thumbs_up: bool
+    session_id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]{1,128}$")
+
+
+class ResumeRepoRequest(BaseModel):
     session_id: str = Field(..., pattern=r"^[a-zA-Z0-9_-]{1,128}$")
 
 
@@ -156,7 +213,7 @@ async def solve_ticket(
 
         # Enforce rate limit using authenticated user identity
         user_id = user.get("sub", "anonymous")
-        if not check_rate_limit(agent.retriever.graph_store.driver, user_id, max_queries=settings.RATE_LIMIT_MAX):
+        if not check_rate_limit(user_id, max_queries=settings.RATE_LIMIT_MAX):
             return JSONResponse(
                 status_code=429,
                 content={"detail": f"Daily query limit of {settings.RATE_LIMIT_MAX} reached. Try again tomorrow."},
@@ -210,22 +267,14 @@ async def solve_ticket(
     except Exception as e:
         # Decrement rate limit counter on failure so quota isn't consumed
         try:
-            decrement_rate_limit(agent.retriever.graph_store.driver, user_id)
+            decrement_rate_limit(user_id)
         except Exception:
             logger.warning("Failed to decrement rate limit on error", extra={"user_id": user_id})
         logger.exception("Error while solving ticket")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _set_status(session_id: str, stage: str, message: str = "") -> None:
-    _SESSION_STATUS[session_id] = {
-        "session_id": session_id,
-        "stage": stage,
-        "message": message,
-    }
-
-
-def _set_status_ex(
+def _update_session(
     session_id: str,
     stage: str,
     message: str = "",
@@ -234,21 +283,22 @@ def _set_status_ex(
     current: int | None = None,
     total: int | None = None,
     eta_seconds: int | None = None,
+    created: bool = False,
 ) -> None:
-    payload: dict[str, Any] = {
-        "session_id": session_id,
-        "stage": stage,
-        "message": message,
-    }
+    """Update session state in Redis. Use created=True for initial creation."""
+    fields: dict[str, Any] = {"stage": stage, "message": message}
     if percent is not None:
-        payload["percent"] = int(max(0, min(100, percent)))
+        fields["percent"] = str(int(max(0, min(100, percent))))
     if current is not None:
-        payload["current"] = int(current)
+        fields["current"] = str(int(current))
     if total is not None:
-        payload["total"] = int(total)
+        fields["total"] = str(int(total))
     if eta_seconds is not None:
-        payload["eta_seconds"] = int(max(0, eta_seconds))
-    _SESSION_STATUS[session_id] = payload
+        fields["eta_seconds"] = str(int(max(0, eta_seconds)))
+    if created:
+        fields["created_at"] = datetime.now().isoformat()
+        fields["completed_phases"] = "[]"
+    redis_store.save_session_sync(session_id, fields)
 
 
 def _index_code_chunks(
@@ -306,7 +356,11 @@ def _index_code_chunks(
         report("indexing_code", end, total, f"Indexing code ({end}/{total})")
 
 
-def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str) -> None:
+def _prepare_repo_task(
+    repo_url: str, github_token: str | None, session_id: str,
+    completed_phases: list[str] | None = None,
+) -> None:
+    """Prepare repository for a session. Supports resume via completed_phases."""
     # Validate session_id to prevent path traversal
     validated_session_id = validate_session_id(session_id)
     if not validated_session_id:
@@ -314,10 +368,22 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
             "Invalid session_id in _prepare_repo_task",
             extra={"session_id": session_id[:50]},
         )
-        _set_status_ex(session_id, "error", "Invalid session_id format", percent=100)
+        _update_session(session_id, "error", "Invalid session_id format", percent=100)
         return
     session_id = validated_session_id
+
+    # Acquire session lock to prevent concurrent resume
+    lock = _get_session_lock(session_id)
+    if not lock.acquire(blocking=False):
+        logger.warning("Session already being processed", extra={"session_id": session_id})
+        _update_session(session_id, "error", "Session already being processed", percent=100)
+        return
+
     try:
+        # Get or initialize completed phases list
+        if completed_phases is None:
+            completed_phases = []
+
         # Overall progress weights — phases 3/4/5 run in parallel after phase 2.
         PHASES = {
             "cloning": 5,
@@ -353,7 +419,7 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
                 remaining = max(0, total - current)
                 eta = int(remaining / max(0.001, rate))
 
-            _set_status_ex(
+            _update_session(
                 session_id,
                 phase,
                 message,
@@ -363,30 +429,54 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
                 eta_seconds=eta,
             )
 
-        # ── Phase 1: Clone ─────────────────────────────────────
-        report("cloning", 0, 1, f"Preparing local repo for {repo_url}")
-        local_path = str(RAW_DOCS_DIR / session_id)
+        # ── Phase 1: Clone (skip if completed) ──────────────────────
+        if "cloning" not in completed_phases:
+            report("cloning", 0, 1, f"Preparing local repo for {repo_url}")
+            local_path = str(RAW_DOCS_DIR / session_id)
 
-        docs_loader = DocsLoader(
-            repo_url=repo_url,
-            github_token=github_token,
-            local_path=local_path,
-            session_id=session_id,
-            progress_cb=report,
-        )
-        report("cloning", 1, 1, "Repository available locally")
+            docs_loader = DocsLoader(
+                repo_url=repo_url,
+                github_token=github_token,
+                local_path=local_path,
+                session_id=session_id,
+                progress_cb=report,
+            )
+            report("cloning", 1, 1, "Repository available locally")
+            completed_phases.append("cloning")
+            redis_store.mark_phase_complete_sync(session_id, "cloning")
+        else:
+            # Re-initialize docs_loader for subsequent phases
+            local_path = str(RAW_DOCS_DIR / session_id)
+            docs_loader = DocsLoader(
+                repo_url=repo_url,
+                github_token=github_token,
+                local_path=local_path,
+                session_id=session_id,
+                progress_cb=report,
+            )
 
-        # ── Phase 2: Parse docs ────────────────────────────────
-        report("parsing_docs", 0, 1, "Loading and splitting docs")
-        chunks = docs_loader.load_and_split()
+        # ── Phase 2: Parse docs (skip if completed) ─────────────────
+        if "parsing_docs" not in completed_phases:
+            report("parsing_docs", 0, 1, "Loading and splitting docs")
+            chunks = docs_loader.load_and_split()
+            completed_phases.append("parsing_docs")
+            redis_store.mark_phase_complete_sync(session_id, "parsing_docs")
+        else:
+            chunks = []
 
         # ── Phases 3/4/5: Index docs, index code, build graph (parallel) ──
 
         def _run_index_docs():
+            if "indexing_docs" in completed_phases:
+                return
             report("indexing_docs", 0, max(1, len(chunks)), "Indexing docs into Qdrant")
             docs_loader.upload_to_qdrant(chunks)
+            completed_phases.append("indexing_docs")
+            redis_store.mark_phase_complete_sync(session_id, "indexing_docs")
 
         def _run_index_code():
+            if "indexing_code" in completed_phases:
+                return
             if not (settings.AST_ENABLED and settings.LOCAL_MODE):
                 return
             from ingestion.code_indexer import CodeIndexer
@@ -409,8 +499,12 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
                     code_chunks, session_id, report,
                     vector_store=agent.retriever.vector_store,
                 )
+            completed_phases.append("indexing_code")
+            redis_store.mark_phase_complete_sync(session_id, "indexing_code")
 
         def _run_build_graph():
+            if "building_graph" in completed_phases:
+                return
             report("building_graph", 0, 20, "Building Neo4j issue graph")
             gh_loader = GitHubGraphLoader(
                 repo_url=repo_url,
@@ -419,6 +513,8 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
                 progress_cb=report,
             )
             gh_loader.run()
+            completed_phases.append("building_graph")
+            redis_store.mark_phase_complete_sync(session_id, "building_graph")
 
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {
@@ -434,10 +530,12 @@ def _prepare_repo_task(repo_url: str, github_token: str | None, session_id: str)
                     logger.exception(f"Parallel phase {phase_name} failed")
                     raise
 
-        _set_status_ex(session_id, "complete", "Repository prepared", percent=100)
+        _update_session(session_id, "complete", "Repository prepared", percent=100)
     except Exception as e:
         logger.exception("Repo preparation failed", extra={"session_id": session_id, "error_type": type(e).__name__})
-        _set_status_ex(session_id, "error", "Repository preparation failed", percent=100)
+        _update_session(session_id, "error", "Repository preparation failed", percent=100)
+    finally:
+        _release_session_lock(session_id)
 
 
 @app.post("/v1/prepare-repo", dependencies=[Depends(get_current_user)])
@@ -454,7 +552,23 @@ async def prepare_repo(
         logger.warning("Invalid session_id format in header", extra={"session_id": x_session_id[:50] if x_session_id else None})
         raise HTTPException(status_code=400, detail="Invalid session_id format")
 
-    _set_status(session_id, "queued", "Repo preparation queued")
+    # Check for existing session
+    existing = await redis_store.get_session(session_id)
+    if existing and existing.get("stage") == "running":
+        return {
+            "status": "interrupted",
+            "session_id": session_id,
+            "completed_phases": existing.get("completed_phases", []),
+            "message": "Previous session was interrupted. Use /v1/resume-repo to continue.",
+        }
+
+    # Start fresh
+    await redis_store.save_session(session_id, {
+        "repo_url": request.repo_url,
+        "stage": "running",
+        "completed_phases": [],
+        "created_at": datetime.now().isoformat(),
+    })
     background_tasks.add_task(_prepare_repo_task, request.repo_url, request.github_token, session_id)
     return {"status": "processing", "metadata": {"session_id": session_id}}
 
@@ -467,10 +581,23 @@ async def get_status(
     session_id = validate_session_id(session_id)
     if not session_id:
         raise HTTPException(status_code=400, detail="Invalid session_id format")
-    status = _SESSION_STATUS.get(session_id)
-    if not status:
-        return {"status": "needs_ingestion", "metadata": {"session_id": session_id}}
-    return {"status": "ok", "data": status}
+
+    # Check Redis first
+    session = await redis_store.get_session(session_id)
+    if session:
+        return {
+            "status": "ok",
+            "data": {
+                "session_id": session_id,
+                "stage": session.get("stage", "unknown"),
+                "message": session.get("message", ""),
+                "percent": int(session.get("percent", 0)) if session.get("percent") else 0,
+                "completed_phases": session.get("completed_phases", []),
+                "eta_seconds": int(session.get("eta_seconds", 0)) if session.get("eta_seconds") else None,
+            },
+        }
+
+    return {"status": "needs_ingestion", "metadata": {"session_id": session_id}}
 
 
 @app.post("/v1/cleanup/{session_id}", dependencies=[Depends(get_current_user)])
@@ -478,28 +605,103 @@ async def cleanup_session(session_id: str, user: dict = Depends(get_current_user
     session_id = validate_session_id(session_id)
     if not session_id:
         raise HTTPException(status_code=400, detail="Invalid session_id format")
-    
+
     # Rate limit cleanup operations (configurable, default 5 per day per user)
     user_id = user.get("sub", "anonymous")
-    if not check_rate_limit_namespace(
-        agent.retriever.graph_store.driver, 
-        user_id, 
-        "cleanup", 
-        settings.CLEANUP_RATE_LIMIT
-    ):
+    if not await redis_store.check_rate_limit_namespace(user_id, "cleanup", settings.CLEANUP_RATE_LIMIT):
         logger.warning("Cleanup rate limit exceeded", extra={"user_id": user_id})
         return JSONResponse(
             status_code=429,
             content={"detail": f"Daily cleanup limit of {settings.CLEANUP_RATE_LIMIT} reached. Try again tomorrow."},
         )
-    
+
     try:
-        agent.cleanup_session(session_id)
-        _SESSION_STATUS.pop(session_id, None)
+        await _cleanup_session_data(session_id)
         return {"status": "success"}
     except Exception as e:
         logger.exception("Cleanup failed", extra={"session_id": session_id})
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _cleanup_session_data(session_id: str) -> None:
+    """Delete all session-scoped data: Redis, Qdrant, Neo4j, disk."""
+    # 1. Delete Redis session state
+    await redis_store.delete_session(session_id)
+
+    # 2. Delete Qdrant collections
+    try:
+        agent.retriever.vector_store.cleanup_session(session_id)
+    except Exception as e:
+        logger.warning("Qdrant cleanup failed: %s", e)
+
+    # 3. Delete Neo4j session nodes
+    try:
+        agent.retriever.graph_store.cleanup_session(session_id)
+    except Exception as e:
+        logger.warning("Neo4j cleanup failed: %s", e)
+
+    # 4. Delete cloned repo from disk
+    repo_path = settings.RAW_DOCS_DIR / session_id
+    if repo_path.exists():
+        shutil.rmtree(repo_path, ignore_errors=True)
+
+
+@app.post("/v1/resume-repo", dependencies=[Depends(get_current_user)])
+async def resume_repo(
+    request: ResumeRepoRequest,
+    background_tasks: BackgroundTasks,
+    x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
+):
+    session_id = x_session_id or request.session_id
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    session_id = validate_session_id(session_id)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
+    session = await redis_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="No session found. Start a new preparation.")
+
+    if session.get("stage") == "complete":
+        return {"status": "already_complete", "session_id": session_id}
+
+    if session.get("stage") != "running":
+        raise HTTPException(status_code=400, detail=f"Session is in '{session.get('stage')}' state. Cannot resume.")
+
+    # Resume in background
+    repo_url = session.get("repo_url", "")
+    github_token = session.get("github_token") or settings.GITHUB_TOKEN
+    completed = session.get("completed_phases", [])
+    background_tasks.add_task(_prepare_repo_task, repo_url, github_token, session_id, completed)
+    return {"status": "resuming", "completed_phases": completed}
+
+
+@app.post("/v1/fresh-repo", dependencies=[Depends(get_current_user)])
+async def fresh_repo(
+    request: PrepareRepoRequest,
+    background_tasks: BackgroundTasks,
+    x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
+):
+    session_id = x_session_id or request.session_id
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    session_id = validate_session_id(session_id)
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
+    # Clean up old session data
+    await _cleanup_session_data(session_id)
+
+    # Start fresh
+    await redis_store.save_session(session_id, {
+        "repo_url": request.repo_url,
+        "stage": "running",
+        "completed_phases": [],
+        "created_at": datetime.now().isoformat(),
+    })
+    background_tasks.add_task(_prepare_repo_task, request.repo_url, request.github_token, session_id)
+    return {"status": "processing", "metadata": {"session_id": session_id}}
 
 
 @app.post("/v1/feedback", dependencies=[Depends(get_current_user)])
@@ -516,6 +718,49 @@ async def submit_feedback(request: FeedbackRequest):
     except Exception as e:
         logger.exception("Feedback storage failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Orphan Cleanup (Phase 6) ────────────────────────────────────────
+
+async def _cleanup_orphaned_sessions() -> int:
+    """Find and clean up Qdrant/Neo4j/disk data for sessions no longer in Redis.
+    Returns the number of orphaned sessions cleaned."""
+    cleaned = 0
+    try:
+        # Scan Qdrant collections for docs_{sid} and code_{sid} patterns
+        collections = agent.retriever.vector_store.client.get_collections().collections
+        for col in collections:
+            name = col.name
+            sid = None
+            if name.startswith("docs_"):
+                sid = name[5:]
+            elif name.startswith("code_"):
+                sid = name[6:]
+            if sid and not await redis_store.get_session(sid):
+                logger.info("Cleaning orphaned Qdrant collection", extra={"collection": name, "session_id": sid})
+                try:
+                    agent.retriever.vector_store.client.delete_collection(name)
+                except Exception as e:
+                    logger.warning("Failed to delete orphaned Qdrant collection %s: %s", name, e)
+                # Also clean Neo4j and disk for this session
+                try:
+                    agent.retriever.graph_store.cleanup_session(sid)
+                except Exception as e:
+                    logger.warning("Failed to clean orphaned Neo4j data for %s: %s", sid, e)
+                repo_path = settings.RAW_DOCS_DIR / sid
+                if repo_path.exists():
+                    shutil.rmtree(repo_path, ignore_errors=True)
+                cleaned += 1
+    except Exception as e:
+        logger.warning("Orphan cleanup scan failed: %s", e)
+    return cleaned
+
+
+@app.post("/v1/admin/cleanup-orphans", dependencies=[Depends(get_current_user)])
+async def cleanup_orphans(user: dict = Depends(get_current_user)):
+    """Manually trigger orphaned session data cleanup."""
+    cleaned = await _cleanup_orphaned_sessions()
+    return {"status": "ok", "cleaned": cleaned}
 
 
 if __name__ == "__main__":

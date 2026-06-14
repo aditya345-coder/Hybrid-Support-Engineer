@@ -1,12 +1,8 @@
-import os
 from typing import Any
 
-from litellm import completion
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from utils.logging_config import setup_logging
-from dotenv import load_dotenv
-
-load_dotenv()
+from settings import settings
 
 logger = setup_logging(__name__)
 
@@ -18,8 +14,8 @@ class LLMGateway:
     """
 
     def __init__(self):
-        self.model = os.getenv("LLM_MODEL", "z-ai/glm4.7")
-        self.api_key = os.getenv("NVIDIA_API_KEY")
+        self.model = settings.LLM_MODEL
+        self.api_key = settings.NVIDIA_API_KEY
         
         self.client = ChatNVIDIA(
             model=self.model,

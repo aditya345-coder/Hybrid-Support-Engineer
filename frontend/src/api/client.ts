@@ -16,8 +16,8 @@ async function authHeaders(): Promise<Record<string, string>> {
   try {
     const token = await _getToken();
     if (token) return { Authorization: `Bearer ${token}` };
-  } catch {
-    // Token retrieval failed — proceed without auth header
+  } catch (err) {
+    console.warn("[authHeaders] Token retrieval failed, proceeding without auth:", err);
   }
   return {};
 }
@@ -26,7 +26,6 @@ export async function solveTicket(
   query: string,
   sessionId: string,
   repoUrl?: string,
-  githubToken?: string,
   allowWebSearch = false
 ): Promise<SolveTicketResponse> {
   const headers: Record<string, string> = {
@@ -53,8 +52,7 @@ export async function solveTicket(
 
 export async function prepareRepo(
   repoUrl: string,
-  sessionId: string,
-  githubToken?: string
+  sessionId: string
 ): Promise<PrepareRepoResponse> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -76,12 +74,57 @@ export async function prepareRepo(
   return res.json();
 }
 
+export async function resumeRepo(
+  sessionId: string
+): Promise<PrepareRepoResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Session-Id": sessionId,
+    ...(await authHeaders()),
+  };
+  const res = await fetch(`${API_BASE}/v1/resume-repo`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || `Request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function freshRepo(
+  repoUrl: string,
+  sessionId: string
+): Promise<PrepareRepoResponse> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Session-Id": sessionId,
+    ...(await authHeaders()),
+  };
+  const res = await fetch(`${API_BASE}/v1/fresh-repo`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ repo_url: repoUrl, session_id: sessionId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || `Request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getStatus(sessionId: string): Promise<StatusResponse> {
   const res = await fetch(`${API_BASE}/v1/status/${sessionId}`, {
     headers: {
       ...(await authHeaders()),
     },
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || `Request failed: ${res.status}`);
+  }
   return res.json();
 }
 

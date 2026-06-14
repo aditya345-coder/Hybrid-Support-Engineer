@@ -207,6 +207,12 @@ marimo/_lsp/
 __marimo__/
 
 
+# Environment secrets
+.env.local
+
+# Frontend
+frontend/node_modules/
+
 # My files
 documentation/
 data/
@@ -217,3 +223,11 @@ logs/
 opencode.json
 session-ses_2dfd.md
 neo4j_check.py
+
+*.txt
+documentation/
+markdown/
+Agents.local.md
+session-ses_19a7.md
+temp.md
+temp2.md

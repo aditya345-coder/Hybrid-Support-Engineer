@@ -19,7 +19,7 @@ def test_solve_ticket_uses_user_sub_for_rate_limit():
         # check_rate_limit was called — note it may fail later in the chain
         mock_check.assert_called()
         call_args = mock_check.call_args[0]
-        assert call_args[1] == "auth0|user123"
+        assert call_args[0] == "auth0|user123"
 
 
 def test_solve_ticket_uses_anonymous_when_no_sub():
@@ -39,4 +39,4 @@ def test_solve_ticket_uses_anonymous_when_no_sub():
         })
         mock_check.assert_called()
         call_args = mock_check.call_args[0]
-        assert call_args[1] == "anonymous"
+        assert call_args[0] == "anonymous"

@@ -2,82 +2,83 @@ import threading
 from datetime import date
 from typing import Dict, Tuple
 
-from neo4j import Driver
+from database.redis_store import get_redis_store
 from settings import settings
 from utils.logging_config import setup_logging
 
 logger = setup_logging(__name__)
 
-# In-memory fallback rate limiter
+# In-memory fallback rate limiter (when Redis unavailable)
 _fallback_counts: Dict[Tuple[str, str], int] = {}
 _fallback_date: str = ""
 _fallback_lock = threading.Lock()
 
+redis_store = get_redis_store()  # shared singleton — same instance as main.py
 
-def check_rate_limit(driver: Driver, user_id: str, max_queries: int | None = None) -> bool:
-    global _fallback_date
+
+def check_rate_limit(user_id: str, max_queries: int | None = None) -> bool:
     if max_queries is None:
         max_queries = settings.RATE_LIMIT_MAX
+
+    # Try Redis first
+    if redis_store._check_available():
+        try:
+            return redis_store.check_rate_limit_sync(user_id, max_queries)
+        except Exception as e:
+            logger.warning(
+                "Redis rate limit check failed, using in-memory fallback",
+                extra={"user_id": user_id, "error": str(e)},
+            )
+
+    # In-memory fallback
     today = date.today().isoformat()
-    
-    # Reset fallback counts if date changed
+    global _fallback_date
     if _fallback_date != today:
         _fallback_counts.clear()
         _fallback_date = today
-    
-    try:
-        with driver.session() as session:
-            # Note: We increment first, then check. This means the counter may overshoot
-            # when the limit is reached. This is acceptable because:
-            # 1. The decrement-on-error fix needs the increment to happen before the check
-            # 2. The overshoot is minimal (at most 1 request worth)
-            result = session.run(
-                """
-                MERGE (r:RateLimit {user_id: $user_id, date: $date})
-                SET r.count = coalesce(r.count, 0) + 1
-                RETURN r.count AS count
-                """,
-                user_id=user_id,
-                date=today,
-            )
-            count = result.single()["count"]
-            return count <= max_queries
-    except Exception as e:
-        logger.warning(
-            "Rate limit check failed, using in-memory fallback",
-            extra={"user_id": user_id, "error": str(e)},
-        )
-        # In-memory fallback with thread safety
-        key = (user_id, today)
-        with _fallback_lock:
-            _fallback_counts[key] = _fallback_counts.get(key, 0) + 1
-            count = _fallback_counts[key]
-        return count <= max_queries
+
+    key = (user_id, today)
+    with _fallback_lock:
+        _fallback_counts[key] = _fallback_counts.get(key, 0) + 1
+        count = _fallback_counts[key]
+    return count <= max_queries
 
 
-def decrement_rate_limit(driver: Driver, user_id: str) -> None:
+def decrement_rate_limit(user_id: str) -> None:
     """Decrement the rate limit counter (used when a request fails)."""
-    today = date.today().isoformat()
-    try:
-        with driver.session() as session:
-            session.run(
-                """
-                MERGE (r:RateLimit {user_id: $user_id, date: $date})
-                SET r.count = CASE
-                    WHEN r.count IS NULL OR r.count <= 0 THEN 0
-                    ELSE r.count - 1
-                END
-                """,
-                user_id=user_id,
-                date=today,
+    if redis_store._check_available():
+        try:
+            redis_store.decrement_rate_limit_sync(user_id)
+            return
+        except Exception as e:
+            logger.warning(
+                "Redis rate limit decrement failed, using in-memory fallback",
+                extra={"user_id": user_id, "error": str(e)},
             )
-    except Exception as e:
-        logger.warning(
-            "Rate limit decrement failed",
-            extra={"user_id": user_id, "error": str(e)},
-        )
-        # In-memory fallback
-        key = (user_id, today)
-        with _fallback_lock:
-            current = _fallback_counts.get(key, 0)
-            _fallback_counts[key] = max(0, current - 1)
+
+    # In-memory fallback
+    today = date.today().isoformat()
+    key = (user_id, today)
+    with _fallback_lock:
+        current = _fallback_counts.get(key, 0)
+        _fallback_counts[key] = max(0, current - 1)
+
+
+def check_rate_limit_namespace(user_id: str, namespace: str, max_queries: int) -> bool:
+    """Check rate limit using a specific namespace (e.g., 'cleanup:{user_id}')."""
+    if redis_store._check_available():
+        try:
+            return redis_store.check_rate_limit_namespace_sync(user_id, namespace, max_queries)
+        except Exception as e:
+            logger.warning(
+                "Redis rate limit check failed, using in-memory fallback",
+                extra={"user_id": user_id, "namespace": namespace, "error": str(e)},
+            )
+
+    # In-memory fallback
+    today = date.today().isoformat()
+    cache_key = (f"{namespace}:{user_id}", today)
+    with _fallback_lock:
+        _fallback_counts[cache_key] = _fallback_counts.get(cache_key, 0) + 1
+        count = _fallback_counts[cache_key]
+    return count <= max_queries

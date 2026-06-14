@@ -1,6 +1,6 @@
-# Omni-Support GraphRAG: FastAPI Support Engineer 🤖
+# Hybrid Support Agent
 
-An agentic AI system designed to act as a support engineer for FastAPI. It uses a **Hybrid GraphRAG** approach, combining semantic documentation search (Qdrant) with historical issue/bug relationship mapping (Neo4j) to provide grounded, cited answers.
+An agentic AI system designed to act as a support engineer for any GitHub repository. It uses a **Hybrid GraphRAG** approach, combining semantic documentation search (Qdrant) with historical issue/bug relationship mapping (Neo4j) to provide grounded, cited answers.
 
 ---
 
@@ -9,15 +9,16 @@ An agentic AI system designed to act as a support engineer for FastAPI. It uses 
 The system follows a multi-layered agentic architecture built with **LangGraph**:
 
 1.  **The Ingestion Pipeline (ETL):**
-    *   **Vector DB (Qdrant):** Stores embeddings of the FastAPI docs with feature tags and a `neo4j_id` bridge.
+    *   **Vector DB (Qdrant):** Stores embeddings of the repository docs with feature tags and a `neo4j_id` bridge.
     *   **Graph DB (Neo4j):** Stores `Issue` and `Feature` nodes linked by `AFFECTS` relationships.
 2.  **The Agentic Core:**
-    *   **Analyzer:** Identifies the FastAPI feature in the user query.
+    *   **Analyzer:** Identifies the relevant feature/component in the user query.
     *   **Hybrid Retriever:** Queries Qdrant and, when possible, Neo4j using the doc feature bridge or detected feature.
     *   **Critic Node:** Verifies grounding and retries retrieval up to 3 times if hallucination is detected.
 3.  **Interaction Layer:**
     *   **FastAPI Backend:** Orchestrates the LangGraph state machine.
-    *   **Streamlit UI:** Chat interface that formats citations and links GitHub issues.
+    *   **React Frontend:** Chat interface on Vercel that formats citations and links GitHub issues.
+    *   **Auth0:** GitHub social login with JWT validation on the backend.
 
 ---
 
@@ -63,6 +64,7 @@ NEO4J_PASSWORD=your_password
 
 # GitHub (for ingestion)
 GITHUB_TOKEN=your_github_pat
+# Set to any GitHub repo (owner/name). This example uses FastAPI.
 TARGET_REPO=tiangolo/fastapi
 
 # Evaluation (optional)
@@ -76,7 +78,7 @@ OPENAI_API_KEY=your_openai_key
 ### Phase 1: Ingest Data (Do this once)
 First, populate your databases with the documentation and GitHub issues:
 ```bash
-# Ingest Documentation into Qdrant (creates fastapi_docs collection)
+# Ingest Documentation into Qdrant
 python src/ingestion/docs_loader.py
 
 # Ingest GitHub Issues into Neo4j (last 20 closed issues)
@@ -90,13 +92,14 @@ You need to run both the backend API and the frontend UI:
     ```bash
     python src/main.py
     ```
-2.  **Start the Streamlit UI:**
+2.  **Start the React Frontend (dev mode):**
     ```bash
-    streamlit run src/ui.py
+    cd frontend
+    cmd /c npm install    # first time only
+    cmd /c npm run dev    # Vite dev server on :5173
     ```
 
 Notes:
-- If the API returns `Collection fastapi_docs not found`, run the docs ingestion step above.
 - Neo4j configuration is required; the app will error if it is missing.
 
 ### Phase 3: (Optional) Run Evaluation

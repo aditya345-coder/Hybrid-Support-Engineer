@@ -7,16 +7,18 @@ from ragas import evaluate
 # Use the correct v0.4.x import path
 from ragas.metrics import Faithfulness, AnswerRelevancy, ContextPrecision
 from ragas.llms import llm_factory
-from ragas.embeddings import embedding_factory
 from openai import OpenAI # Use the base OpenAI client for the wrapper
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from agents.support_agent import SupportAgent
 from ragas.embeddings.base import LangchainEmbeddingsWrapper # Critical import
 
+from config import PROJECT_ROOT
+
 load_dotenv()
 
 # 1. Load Dataset
-with open("src/evaluation/golden_dataset.json", "r") as f:
+dataset_path = PROJECT_ROOT / "src" / "evaluation" / "golden_dataset.json"
+with open(dataset_path, "r", encoding="utf-8") as f:
     dataset = json.load(f)
 
 # 2. Prepare Agent
@@ -46,7 +48,26 @@ def run_evaluation():
     print("Running Evaluation (v0.4.x)...")
 
     for item in dataset:
-        state = agent.app.invoke({"query": item["user_query"]})
+        q = item["user_query"]
+        # Provide the minimal state expected by the current graph.
+        state = agent.app.invoke(
+            {
+                "query": q,
+                "original_query": q,
+                "rewritten_query": "",
+                "repo_name": "this repository",
+                "session_id": "",
+                "detected_feature": "",
+                "documents": [],
+                "github_issues": [],
+                "web_results": [],
+                "response": "",
+                "is_relevant": True,
+                "is_hallucination": False,
+                "iteration": 0,
+                "allow_web_search": False,
+            }
+        )
         
         # Flatten contexts
         flat_contexts = state.get("documents", []) + state.get("github_issues", [])
