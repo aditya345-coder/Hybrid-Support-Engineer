@@ -5,8 +5,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
-load_dotenv(".env.local")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env.local")
 
 
 class Settings:
@@ -82,7 +82,10 @@ class Settings:
     # ── Logging ─────────────────────────────────────────────────
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_TO_FILE: bool = os.getenv("LOG_TO_FILE", "false").lower() == "true"
-    LOG_FILE: str = os.getenv("LOG_FILE", "logs/app.log")
+    LOG_FILE: str = os.getenv(
+        "LOG_FILE",
+        str(Path(__file__).resolve().parent.parent / "logs" / "app.log"),
+    )
 
     # ── LangSmith ───────────────────────────────────────────────
     LANGCHAIN_TRACING_V2: bool = os.getenv("LANGCHAIN_TRACING_V2", "false").lower() == "true"
@@ -92,7 +95,10 @@ class Settings:
 
     # ── Checkpointer ────────────────────────────────────────────
     CHECKPOINTER: str = os.getenv("CHECKPOINTER", "memory")
-    SQLITE_PATH: str = os.getenv("SQLITE_PATH", "data/checkpoints.db")
+    SQLITE_PATH: str = os.getenv(
+        "SQLITE_PATH",
+        str(Path(__file__).resolve().parent.parent / "data" / "checkpoints.db"),
+    )
     POSTGRES_URI: str | None = os.getenv("POSTGRES_URI")
 
 

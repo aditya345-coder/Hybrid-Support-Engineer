@@ -37,7 +37,7 @@ git clone https://github.com/your-username/The-Knowledge-Graph-Support-Engineer.
 cd The-Knowledge-Graph-Support-Engineer
 
 # Install dependencies
-pip install -e .
+pip install -e backend/
 ```
 
 ### 3. Environment Configuration
@@ -79,10 +79,10 @@ OPENAI_API_KEY=your_openai_key
 First, populate your databases with the documentation and GitHub issues:
 ```bash
 # Ingest Documentation into Qdrant
-python src/ingestion/docs_loader.py
+python backend/src/ingestion/docs_loader.py
 
 # Ingest GitHub Issues into Neo4j (last 20 closed issues)
-python src/ingestion/github_loader.py
+python backend/src/ingestion/github_loader.py
 ```
 
 ### Phase 2: Start the System
@@ -90,7 +90,7 @@ You need to run both the backend API and the frontend UI:
 
 1.  **Start the Backend API:**
     ```bash
-    python src/main.py
+    python backend/src/main.py
     ```
 2.  **Start the React Frontend (dev mode):**
     ```bash
@@ -104,7 +104,7 @@ Notes:
 
 ### Phase 3: (Optional) Run Evaluation
 ```bash
-python src/evaluation/evaluate.py
+python backend/src/evaluation/evaluate.py
 ```
 
 ---

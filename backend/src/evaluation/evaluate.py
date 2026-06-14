@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from datasets import Dataset
 
@@ -14,7 +15,7 @@ from ragas.embeddings.base import LangchainEmbeddingsWrapper # Critical import
 
 from config import PROJECT_ROOT
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 # 1. Load Dataset
 dataset_path = PROJECT_ROOT / "src" / "evaluation" / "golden_dataset.json"

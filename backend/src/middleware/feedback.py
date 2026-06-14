@@ -11,7 +11,9 @@ logger = setup_logging(__name__)
 
 
 class FeedbackStore:
-    def __init__(self, db_path: str | Path = "data/feedback.db"):
+    def __init__(self, db_path: str | Path | None = None):
+        if db_path is None:
+            db_path = Path(__file__).resolve().parent.parent.parent / "data" / "feedback.db"
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

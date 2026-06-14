@@ -215,19 +215,24 @@ frontend/node_modules/
 
 # My files
 documentation/
-data/
+backend/data/
 qdrant-x86_64-pc-windows-msvc.zip
 requirement_specification.md
 qdrant_dummy.py
-logs/
+backend/logs/
 opencode.json
 session-ses_2dfd.md
 neo4j_check.py
 
 *.txt
-documentation/
 markdown/
 Agents.local.md
 session-ses_19a7.md
 temp.md
 temp2.md
+
+# Backend
+backend/__pycache__/
+docs/
+documentation/
+.opencode/
