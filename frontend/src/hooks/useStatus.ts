@@ -7,7 +7,7 @@ export function useStatus(sessionId: string, enabled: boolean) {
   const intervalRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!enabled || !sessionId) return;
+    if (!enabled || !sessionId || typeof sessionId !== "string") return;
 
     const poll = async () => {
       try {

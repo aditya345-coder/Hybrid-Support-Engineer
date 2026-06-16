@@ -1,0 +1,29 @@
+name: CD — Backend (Render)
+
+on:
+  push:
+    branches: ["main"]
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Render
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = await fetch(process.env.RENDER_DEPLOY_HOOK, {
+              method: 'POST'
+            });
+            if (!response.ok) {
+              core.setFailed(`Deploy failed: ${response.status}`);
+            } else {
+              console.log('Deploy triggered successfully');
+            }

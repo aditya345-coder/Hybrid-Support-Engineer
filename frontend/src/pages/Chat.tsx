@@ -5,10 +5,12 @@ import { useChat } from "../hooks/useChat";
 interface Props {
   sessionId: string;
   repoUrl?: string;
+  webSearchEnabled: boolean;
+  onWebSearchToggle: () => void;
 }
 
-export function Chat({ sessionId, repoUrl }: Props) {
-  const { messages, loading, send } = useChat(sessionId, repoUrl);
+export function Chat({ sessionId, repoUrl, webSearchEnabled, onWebSearchToggle }: Props) {
+  const { messages, loading, send } = useChat(sessionId, repoUrl, webSearchEnabled);
 
   return (
     <main className="flex-1 flex flex-col">
@@ -18,7 +20,12 @@ export function Chat({ sessionId, repoUrl }: Props) {
         sessionId={sessionId}
         repoUrl={repoUrl}
       />
-      <ChatInput onSend={send} disabled={loading} />
+      <ChatInput
+        onSend={send}
+        disabled={loading}
+        webSearchEnabled={webSearchEnabled}
+        onWebSearchToggle={onWebSearchToggle}
+      />
     </main>
   );
 }

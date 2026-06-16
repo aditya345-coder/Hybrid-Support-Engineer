@@ -99,6 +99,14 @@ def _embed_and_upsert(
             collection_name=collection,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
+    try:
+        vector_store.client.create_payload_index(
+            collection_name=collection,
+            field_name="session_id",
+            field_schema="keyword",
+        )
+    except Exception:
+        pass
     points = []
     for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
         points.append(

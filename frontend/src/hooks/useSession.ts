@@ -5,7 +5,7 @@ function generateId(): string {
 }
 
 export function useSession() {
-  const [sessionId, setSessionId] = useState<string>("");
+  const [sessionId, setSessionIdState] = useState<string>("");
 
   useEffect(() => {
     let id = localStorage.getItem("session_id");
@@ -13,8 +13,13 @@ export function useSession() {
       id = generateId();
       localStorage.setItem("session_id", id);
     }
-    setSessionId(id);
+    setSessionIdState(id);
   }, []);
 
-  return sessionId;
+  const setSessionId = (id: string) => {
+    localStorage.setItem("session_id", id);
+    setSessionIdState(id);
+  };
+
+  return { sessionId, setSessionId };
 }

@@ -17,7 +17,7 @@ export function FeedbackButtons({ query, answer, feature, sessionId }: Props) {
   };
 
   if (submitted) {
-    return <span className="text-sm text-gray-500">Thanks for the feedback!</span>;
+    return <span className="text-sm text-gray-500 dark:text-gray-400">Thanks for the feedback!</span>;
   }
 
   return (

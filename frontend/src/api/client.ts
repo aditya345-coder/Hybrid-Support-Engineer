@@ -149,7 +149,7 @@ export async function submitFeedback(
     "Content-Type": "application/json",
     ...(await authHeaders()),
   };
-  await fetch(`${API_BASE}/v1/feedback`, {
+  const res = await fetch(`${API_BASE}/v1/feedback`, {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -159,5 +159,38 @@ export async function submitFeedback(
       thumbs_up: thumbsUp,
       session_id: sessionId,
     }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || `Request failed: ${res.status}`);
+  }
+}
+
+export interface RepoEntry {
+  sessionId: string;
+  repoUrl: string;
+  name: string;
+  preparedAt: string;
+}
+
+export async function getRepoList(): Promise<RepoEntry[]> {
+  const headers: Record<string, string> = {
+    ...(await authHeaders()),
+  };
+  const res = await fetch(`${API_BASE}/v1/repo-list`, { headers });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.repos || [];
+}
+
+export async function saveRepoListAPI(repos: RepoEntry[]): Promise<void> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(await authHeaders()),
+  };
+  await fetch(`${API_BASE}/v1/repo-list`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ repos }),
   });
 }

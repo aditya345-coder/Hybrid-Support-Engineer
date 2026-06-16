@@ -38,6 +38,7 @@ export interface StatusResponse {
     total?: number;
     eta_seconds?: number;
     completed_phases?: string[];
+    repo_url?: string;
   };
 }
 

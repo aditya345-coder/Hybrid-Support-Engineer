@@ -4,6 +4,7 @@ from datetime import date
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
+import redis as sync_redis
 
 from database.redis_store import RedisStore
 
@@ -206,7 +207,7 @@ class TestFallbackBehavior:
         """Verify save_session_sync doesn't crash when Redis is unavailable."""
         s = RedisStore()
         s._sync_client = mock_client
-        mock_client.hset.side_effect = Exception("Connection lost")
+        mock_client.hset.side_effect = sync_redis.ConnectionError("Connection lost")
         # Should not raise
         s.save_session_sync("sess1", {"stage": "running"})
 
@@ -214,6 +215,6 @@ class TestFallbackBehavior:
         """Verify get_session_sync returns None when Redis is unavailable."""
         s = RedisStore()
         s._sync_client = mock_client
-        mock_client.hgetall.side_effect = Exception("Connection lost")
+        mock_client.hgetall.side_effect = sync_redis.ConnectionError("Connection lost")
         result = s.get_session_sync("sess1")
         assert result is None

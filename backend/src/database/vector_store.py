@@ -28,7 +28,10 @@ class VectorStore:
                 check_compatibility=False,
             )
             logger.info("Using Qdrant client", extra={"url": qdrant_url})
-        self.embeddings = FastEmbedEmbeddings(model_name="BAAI/bge-small-en-v1.5")
+        self.embeddings = FastEmbedEmbeddings(
+            model_name="BAAI/bge-small-en-v1.5",
+            threads=settings.ONNX_THREADS,
+        )
         # Default collection name should not assume any particular target project.
         self.collection_name = (settings.QDRANT_COLLECTION or "docs_default").strip() or "docs_default"
 
@@ -60,49 +63,67 @@ class VectorStore:
             ]
         )
 
-    def search(self, query: str, limit: int = 3, session_id: str | None = None):
+    def search(self, query: str, limit: int = 3, session_id: str | None = None, _retried: bool = False):
         """Performs semantic search on the documentation."""
         query_vector = self.embeddings.embed_query(query)
         client: Any = self.client
         search_fn = getattr(client, "search", None)
         q_filter = self._session_filter(session_id)
         collection = self._collection_for_session(session_id)
-        if callable(search_fn):
-            # qdrant-client has used both `query_filter` and `filter` across versions.
-            try:
-                raw_points = search_fn(
-                    collection_name=collection,
-                    query_vector=query_vector,
-                    limit=limit,
-                    query_filter=q_filter,
-                )
-            except TypeError:
-                raw_points = search_fn(
-                    collection_name=collection,
-                    query_vector=query_vector,
-                    limit=limit,
-                    filter=q_filter,
-                )
-            logger.debug("Qdrant search used")
-            points = list(cast(Iterable[Any], raw_points))
-        else:
-            try:
-                response = client.query_points(
-                    collection_name=collection,
-                    query=query_vector,
-                    limit=limit,
-                    query_filter=q_filter,
-                )
-            except TypeError:
-                response = client.query_points(
-                    collection_name=collection,
-                    query=query_vector,
-                    limit=limit,
-                    filter=q_filter,
-                )
-            logger.debug("Qdrant query_points used")
-            raw_points = getattr(response, "points", [])
-            points = list(cast(Iterable[Any], raw_points))
+        try:
+            if callable(search_fn):
+                try:
+                    raw_points = search_fn(
+                        collection_name=collection,
+                        query_vector=query_vector,
+                        limit=limit,
+                        query_filter=q_filter,
+                    )
+                except TypeError:
+                    raw_points = search_fn(
+                        collection_name=collection,
+                        query_vector=query_vector,
+                        limit=limit,
+                        filter=q_filter,
+                    )
+                logger.debug("Qdrant search used")
+                points = list(cast(Iterable[Any], raw_points))
+            else:
+                try:
+                    response = client.query_points(
+                        collection_name=collection,
+                        query=query_vector,
+                        limit=limit,
+                        query_filter=q_filter,
+                    )
+                except TypeError:
+                    response = client.query_points(
+                        collection_name=collection,
+                        query=query_vector,
+                        limit=limit,
+                        filter=q_filter,
+                    )
+                logger.debug("Qdrant query_points used")
+                raw_points = getattr(response, "points", [])
+                points = list(cast(Iterable[Any], raw_points))
+        except Exception as exc:
+            err_str = str(exc)
+            if "Index required" in err_str and "session_id" in err_str and not _retried:
+                logger.warning("Missing session_id payload index — creating it and retrying")
+                try:
+                    client.create_payload_index(
+                        collection_name=collection,
+                        field_name="session_id",
+                        field_schema="keyword",
+                    )
+                except Exception:
+                    logger.debug("Failed to create payload index, searching without filter")
+                    return self.search(query, limit=limit, session_id=None, _retried=True)
+                return self.search(query, limit=limit, session_id=session_id, _retried=True)
+            if "Index required" in err_str and "session_id" in err_str:
+                logger.warning("Fallback: searching without session filter")
+                return self.search(query, limit=limit, session_id=None, _retried=True)
+            raise
         results = []
         for res in points:
             payload = getattr(res, "payload", None) or {}

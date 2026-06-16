@@ -16,8 +16,12 @@ export function BotMessage({ content, query, feature, sessionId, repoUrl }: Prop
 
   return (
     <div className="flex justify-start mb-4">
-      <div className={`rounded-2xl rounded-bl-sm px-4 py-2 max-w-[80%] ${refusal ? "bg-yellow-50 border border-yellow-200" : "bg-gray-100"}`}>
-        <div className="text-sm whitespace-pre-wrap">{formatted}</div>
+      <div className={`rounded-2xl rounded-bl-sm px-4 py-2 max-w-[80%] ${
+        refusal
+          ? "bg-yellow-50 border border-yellow-200 dark:bg-yellow-900/30 dark:border-yellow-700"
+          : "bg-gray-100 dark:bg-gray-800"
+      }`}>
+        <div className="text-sm whitespace-pre-wrap dark:text-gray-100">{formatted}</div>
         {!refusal && (
           <FeedbackButtons
             query={query}

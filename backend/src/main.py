@@ -321,6 +321,14 @@ def _index_code_chunks(
             collection_name=collection_name,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
+    try:
+        vector_store.client.create_payload_index(
+            collection_name=collection_name,
+            field_name="session_id",
+            field_schema="keyword",
+        )
+    except Exception:
+        logger.debug("Payload index for session_id already exists")
 
     total = len(chunks)
     batch_size = 64
@@ -594,6 +602,7 @@ async def get_status(
                 "percent": int(session.get("percent", 0)) if session.get("percent") else 0,
                 "completed_phases": session.get("completed_phases", []),
                 "eta_seconds": int(session.get("eta_seconds", 0)) if session.get("eta_seconds") else None,
+                "repo_url": session.get("repo_url", ""),
             },
         }
 
@@ -718,6 +727,23 @@ async def submit_feedback(request: FeedbackRequest):
     except Exception as e:
         logger.exception("Feedback storage failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Repo List Persistence ────────────────────────────────────────────
+
+@app.get("/v1/repo-list", dependencies=[Depends(get_current_user)])
+async def get_repo_list(user: dict = Depends(get_current_user)):
+    user_id = user.get("sub", "anonymous")
+    repos = await redis_store.get_repo_list(user_id)
+    return {"repos": repos}
+
+
+@app.post("/v1/repo-list", dependencies=[Depends(get_current_user)])
+async def save_repo_list(request: Request, user: dict = Depends(get_current_user)):
+    body = await request.json()
+    user_id = user.get("sub", "anonymous")
+    await redis_store.save_repo_list(user_id, body.get("repos", []))
+    return {"status": "ok"}
 
 
 # ── Orphan Cleanup (Phase 6) ────────────────────────────────────────

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from datetime import date
 from typing import TypedDict
 
@@ -82,6 +83,7 @@ class RedisStore:
         self._client: redis.Redis | None = None
         self._lock = threading.Lock()
         self._available = True
+        self._last_error_time: float = 0.0
 
     async def _get_client(self) -> redis.Redis:
         """Lazy-initialize the async Redis client."""
@@ -108,8 +110,20 @@ class RedisStore:
             return self._client
 
     def _check_available(self) -> bool:
-        """Check if Redis should be used (fail-closed mode)."""
-        return self._available
+        """Check if Redis should be used. Attempts reconnection after 30s cooldown."""
+        if self._available:
+            return True
+        if time.monotonic() - self._last_error_time <= 30:
+            return False
+        try:
+            if hasattr(self, "_sync_client") and self._sync_client is not None:
+                self._sync_client.ping()
+                self._available = True
+                logger.info("Redis reconnection successful")
+                return True
+        except Exception:
+            self._last_error_time = time.monotonic()
+        return False
 
     # ── Session State ────────────────────────────────────────────────
 
@@ -126,7 +140,7 @@ class RedisStore:
             await client.expire(key, 86400)
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for save_session: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
 
     async def get_session(self, session_id: str) -> SessionData | None:
         """Retrieve session data. Returns None if expired or missing."""
@@ -151,7 +165,7 @@ class RedisStore:
             return result
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for get_session: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
             return None
 
     async def mark_phase_complete(self, session_id: str, phase: str) -> bool:
@@ -168,7 +182,7 @@ class RedisStore:
             return result == 1
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for mark_phase_complete: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
             return False
 
     async def update_session_stage(self, session_id: str, stage: str, **fields: str) -> None:
@@ -185,7 +199,7 @@ class RedisStore:
             await client.hset(key, mapping=mapping)
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for update_session_stage: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
 
     async def update_session_fields(self, session_id: str, **fields: str | list[str]) -> None:
         """Update arbitrary session fields using HSET (single roundtrip)."""
@@ -202,7 +216,7 @@ class RedisStore:
             await client.hset(key, mapping=mapping)
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for update_session_fields: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session key."""
@@ -214,7 +228,7 @@ class RedisStore:
             await client.delete(f"session:{session_id}")
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for delete_session: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
 
     async def get_running_sessions(self) -> list[dict]:
         """Find all sessions with stage=running via SCAN."""
@@ -232,7 +246,7 @@ class RedisStore:
             return result
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for get_running_sessions: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
             return []
 
     # ── Rate Limiting ────────────────────────────────────────────────
@@ -255,7 +269,7 @@ class RedisStore:
             return int(count) <= limit
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for check_rate_limit: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
             return False
 
     async def decrement_rate_limit(self, user_id: str) -> None:
@@ -269,7 +283,7 @@ class RedisStore:
             await client.eval(_RATE_LIMIT_DECR_LUA, 1, key)
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for decrement_rate_limit: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
 
     async def check_rate_limit_namespace(self, user_id: str, namespace: str, limit: int) -> bool:
         """Namespaced rate limit check. Atomic via Lua."""
@@ -283,7 +297,7 @@ class RedisStore:
             return int(count) <= limit
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for check_rate_limit_namespace: %s", e)
-            self._available = False
+            self._last_error_time = time.monotonic()
             return False
 
     # ── Connection Health ────────────────────────────────────────────
@@ -326,17 +340,24 @@ class RedisStore:
 
     def save_session_sync(self, session_id: str, data: dict) -> None:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = f"session:{session_id}"
             mapping = {k: json.dumps(v) if isinstance(v, (list, dict)) else str(v) for k, v in data.items()}
             client.hset(key, mapping=mapping)
             client.expire(key, 86400)
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for save_session_sync: %s", e)
+            self._last_error_time = time.monotonic()
 
     def get_session_sync(self, session_id: str) -> SessionData | None:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return None
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = f"session:{session_id}"
@@ -350,12 +371,16 @@ class RedisStore:
                 else:
                     result[k] = v
             return result
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for get_session_sync: %s", e)
+            self._last_error_time = time.monotonic()
             return None
 
     def mark_phase_complete_sync(self, session_id: str, phase: str) -> bool:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return False
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = f"session:{session_id}"
@@ -363,12 +388,16 @@ class RedisStore:
             timestamp = datetime.now().isoformat()
             result = client.eval(_MARK_PHASE_LUA, 1, key, phase, timestamp)
             return result == 1
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for mark_phase_complete_sync: %s", e)
+            self._last_error_time = time.monotonic()
             return False
 
     def update_session_stage_sync(self, session_id: str, stage: str, **fields: str) -> None:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = f"session:{session_id}"
@@ -376,47 +405,93 @@ class RedisStore:
             mapping = {"stage": stage, "updated_at": datetime.now().isoformat()}
             mapping.update({k: str(v) for k, v in fields.items()})
             client.hset(key, mapping=mapping)
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for update_session_stage_sync: %s", e)
+            self._last_error_time = time.monotonic()
 
     def delete_session_sync(self, session_id: str) -> None:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             client.delete(f"session:{session_id}")
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for delete_session_sync: %s", e)
+            self._last_error_time = time.monotonic()
 
     def decrement_rate_limit_sync(self, user_id: str) -> None:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = self._rate_limit_key(user_id)
             client.eval(_RATE_LIMIT_DECR_LUA, 1, key)
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for decrement_rate_limit_sync: %s", e)
+            self._last_error_time = time.monotonic()
 
     def check_rate_limit_sync(self, user_id: str, limit: int) -> bool:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return False
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = self._rate_limit_key(user_id)
             count = client.eval(_RATE_LIMIT_LUA, 1, key, limit, 86400)
             return int(count) <= limit
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for check_rate_limit_sync: %s", e)
+            self._last_error_time = time.monotonic()
             return False
 
     def check_rate_limit_namespace_sync(self, user_id: str, namespace: str, limit: int) -> bool:
         """Sync version for background tasks."""
+        if not self._check_available():
+            return False
+        import redis as sync_redis
         try:
             client = self._get_sync_client()
             key = self._rate_limit_key(user_id, namespace)
             count = client.eval(_RATE_LIMIT_LUA, 1, key, limit, 86400)
             return int(count) <= limit
-        except Exception as e:
+        except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for check_rate_limit_namespace_sync: %s", e)
+            self._last_error_time = time.monotonic()
             return False
+
+
+    # ── Repo List Persistence (30-day TTL) ──────────────────────────
+
+    async def save_repo_list(self, user_id: str, repos: list[dict]) -> None:
+        """Save repo list with 30-day TTL."""
+        if not self._check_available():
+            return
+        try:
+            client = await self._get_client()
+            key = f"repo_list:{user_id}"
+            await client.set(key, json.dumps(repos), ex=2592000)
+        except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
+            logger.warning("Redis unavailable for save_repo_list: %s", e)
+            self._last_error_time = time.monotonic()
+
+    async def get_repo_list(self, user_id: str) -> list[dict]:
+        """Retrieve repo list."""
+        if not self._check_available():
+            return []
+        try:
+            client = await self._get_client()
+            key = f"repo_list:{user_id}"
+            data = await client.get(key)
+            return json.loads(data) if data else []
+        except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
+            logger.warning("Redis unavailable for get_repo_list: %s", e)
+            self._last_error_time = time.monotonic()
+            return []
 
 
 # ── Module-level singleton ───────────────────────────────────────────

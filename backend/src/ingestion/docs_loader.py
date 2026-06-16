@@ -69,18 +69,28 @@ class DocsLoader:
                 # Best-effort only; ingestion must continue.
                 pass
 
+    @staticmethod
+    def _strip_github_suffixes(url: str) -> str:
+        """Strip /tree/branch, /blob/path, /pull/N etc from GitHub URLs."""
+        url = url.removesuffix(".git")
+        for marker in ("/tree/", "/blob/", "/pull/", "/issues/"):
+            idx = url.find(marker)
+            if idx != -1:
+                url = url[:idx]
+        return url
+
     def _clone_url(self) -> str:
         repo = (self.repo_url or "").strip()
         if not repo:
             raise ValueError("repo_url must be provided (or set TARGET_REPO)")
         if repo.startswith("http://") or repo.startswith("https://"):
-            return repo
+            return self._strip_github_suffixes(repo)
         # Accept owner/name (UI default) and convert to a cloneable HTTPS URL.
         return f"https://github.com/{repo}.git"
 
     def _repo_owner_name(self) -> str:
         url = self.repo_url or settings.TARGET_REPO or ""
-        url = url.removesuffix(".git")
+        url = self._strip_github_suffixes(url)
         if url.startswith("http"):
             parts = [p for p in url.rstrip("/").split("/") if p]
             if len(parts) >= 2:
@@ -93,6 +103,11 @@ class DocsLoader:
         gh_token = self.github_token or settings.GITHUB_TOKEN
         gh = Github(gh_token)
         repo_name = self._repo_owner_name()
+        if repo_name.count("/") != 1 or not all(part.strip() for part in repo_name.split("/")):
+            raise ValueError(
+                f"Invalid GitHub repo format: '{repo_name}'. "
+                "Expected 'owner/repo' (e.g. 'pytorch/pytorch')."
+            )
         repo = gh.get_repo(repo_name)
 
         def walk_contents(contents) -> list[dict]:
@@ -288,8 +303,13 @@ class DocsLoader:
         if not texts:
             return []
 
-        # Single batch embedding call for all chunk texts
-        text_vecs = np.array(self.vector_store.embeddings.embed_documents(texts))
+        # Batch embedding to avoid ONNX Runtime BFC arena OOM
+        batch_size = settings.DOCS_UPSERT_BATCH
+        all_vectors = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            all_vectors.extend(self.vector_store.embeddings.embed_documents(batch))
+        text_vecs = np.array(all_vectors)
 
         # Build feature matrix: shape (n_features, embedding_dim)
         feat_names = [name for name, _ in self._feature_embeddings]
@@ -301,7 +321,7 @@ class DocsLoader:
         # Avoid division by zero
         text_norms = np.where(text_norms == 0, 1, text_norms)
         feat_norms = np.where(feat_norms == 0, 1, feat_norms)
-        similarity = (text_vecs @ feat_matrix.T) / (text_norms * feat_norms)
+        similarity = (text_vecs @ feat_matrix.T) / (text_norms * feat_norms.T)
 
         threshold = 0.5
         results = []
@@ -454,6 +474,14 @@ class DocsLoader:
                 collection_name=collection_name,
                 vectors_config=VectorParams(size=384, distance=Distance.COSINE),
             )
+        try:
+            self.vector_store.client.create_payload_index(
+                collection_name=collection_name,
+                field_name="session_id",
+                field_schema="keyword",
+            )
+        except Exception:
+            logger.debug("Payload index for session_id already exists")
 
         unique_features = set()
         for chunk in chunks:

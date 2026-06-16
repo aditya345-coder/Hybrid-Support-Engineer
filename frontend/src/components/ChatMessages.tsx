@@ -19,7 +19,7 @@ export function ChatMessages({ messages, loading, sessionId, repoUrl }: Props) {
 
   if (messages.length === 0 && !loading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-gray-400">
+      <div className="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
         <p className="text-lg">Ask a question to get started</p>
       </div>
     );
@@ -43,8 +43,8 @@ export function ChatMessages({ messages, loading, sessionId, repoUrl }: Props) {
       )}
       {loading && (
         <div className="flex justify-start mb-4">
-          <div className="bg-gray-100 rounded-2xl rounded-bl-sm px-4 py-2">
-            <p className="text-sm text-gray-500">Thinking...</p>
+          <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-bl-sm px-4 py-2">
+            <p className="text-sm text-gray-500 dark:text-gray-400">Thinking...</p>
           </div>
         </div>
       )}

@@ -20,6 +20,7 @@ class Settings:
     MAX_ISSUES_FETCHED: int = int(os.getenv("MAX_ISSUES_FETCHED", "20"))
     MAX_VERIFY_RETRIES: int = int(os.getenv("MAX_VERIFY_RETRIES", "3"))
     DOCS_UPSERT_BATCH: int = int(os.getenv("DOCS_UPSERT_BATCH", "64"))
+    ONNX_THREADS: int = int(os.getenv("ONNX_THREADS", "1"))
 
     # ── AST Code Indexing ───────────────────────────────────────
     AST_ENABLED: bool = os.getenv("AST_ENABLED", "T").upper() == "T"

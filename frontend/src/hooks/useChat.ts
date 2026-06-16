@@ -2,7 +2,7 @@ import { useState } from "react";
 import { solveTicket } from "../api/client";
 import type { Message } from "../types";
 
-export function useChat(sessionId: string, repoUrl?: string) {
+export function useChat(sessionId: string, repoUrl?: string, webSearchEnabled = false) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -12,7 +12,7 @@ export function useChat(sessionId: string, repoUrl?: string) {
     setLoading(true);
 
     try {
-      const result = await solveTicket(query, sessionId, repoUrl);
+      const result = await solveTicket(query, sessionId, repoUrl, webSearchEnabled);
       const botMsg: Message = {
         id: crypto.randomUUID(),
         role: "assistant",
