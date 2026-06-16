@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
 import { prepareRepo, resumeRepo, freshRepo, getStatus, cleanupSession, getRepoList, saveRepoListAPI } from "../api/client";
 import type { RepoEntry } from "../api/client";
@@ -89,18 +89,17 @@ function generateId(): string {
 
 export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, onThemeToggle }: Props) {
   const [repoUrl, setRepoUrl] = useState("");
-  const [preparing, setPreparing] = useState(false);
+  const preparingRef = useRef(false);
   const [showResumeDialog, setShowResumeDialog] = useState(false);
   const [interruptedSession, setInterruptedSession] = useState<{ completed_phases: string[]; percent?: number } | null>(null);
   const [repoList, setRepoList] = useState<RepoEntry[]>(loadRepoList);
 
-  const status = useStatus(sessionId, preparing);
+  const status = useStatus(sessionId, preparingRef.current);
 
-  useEffect(() => {
-    if (status?.data?.stage === "complete" || status?.data?.stage === "error") {
-      setPreparing(false);
-    }
-  }, [status?.data?.stage]);
+  const isPreparing = useMemo(
+    () => preparingRef.current && status?.data?.stage !== "complete" && status?.data?.stage !== "error",
+    [status?.data?.stage],
+  );
 
   useEffect(() => {
     if (!sessionId || typeof sessionId !== "string") return;
@@ -133,7 +132,7 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
         }
       })
       .catch(() => {});
-  }, [sessionId]);
+  }, [sessionId, onRepoUrlChange]);
 
   // Sync repo list from backend on mount
   useEffect(() => {
@@ -161,7 +160,7 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
         setShowResumeDialog(true);
         return;
       }
-      setPreparing(true);
+      preparingRef.current = true;
       const name = repoNameFromUrl(repoUrl.trim());
       const updated = repoList.filter((r) => r.sessionId !== sessionId);
       updated.push({ sessionId, repoUrl: repoUrl.trim(), name, preparedAt: new Date().toISOString() });
@@ -169,27 +168,27 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
       saveRepoList(updated);
       saveRepoListAPI(updated).catch(() => {});
     } catch {
-      setPreparing(false);
+      preparingRef.current = false;
     }
   };
 
   const handleResume = async () => {
     setShowResumeDialog(false);
-    setPreparing(true);
+    preparingRef.current = true;
     try {
       await resumeRepo(sessionId);
     } catch {
-      setPreparing(false);
+      preparingRef.current = false;
     }
   };
 
   const handleFresh = async () => {
     setShowResumeDialog(false);
-    setPreparing(true);
+    preparingRef.current = true;
     try {
       await freshRepo(repoUrl.trim(), sessionId);
     } catch {
-      setPreparing(false);
+      preparingRef.current = false;
     }
   };
 
@@ -300,7 +299,7 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
           value={repoUrl}
           onChange={(e) => handleRepoUrlInput(e.target.value)}
           placeholder="owner/repo"
-          disabled={preparing}
+          disabled={isPreparing}
           className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100 dark:placeholder-gray-400"
         />
       </div>
@@ -308,14 +307,14 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
       <div className="flex gap-2">
         <button
           onClick={handlePrepare}
-          disabled={preparing || !repoUrl.trim()}
+          disabled={isPreparing || !repoUrl.trim()}
           className="flex-1 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
         >
-          {preparing ? "Preparing..." : "Prepare"}
+          {isPreparing ? "Preparing..." : "Prepare"}
         </button>
         <button
           onClick={handleAddNew}
-          disabled={preparing}
+          disabled={isPreparing}
           className="px-3 py-2 border border-gray-300 rounded-lg text-sm hover:bg-gray-100 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 cursor-pointer"
           title="Add new repo"
         >
@@ -350,7 +349,7 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
         </div>
       )}
 
-      {preparing && status?.data && (
+      {isPreparing && status?.data && (
         <ProgressBar
           percent={status.data.percent || 0}
           message={status.data.message || stage || "Processing..."}
@@ -365,12 +364,12 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
               ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
               : isError
               ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-              : preparing
+              : isPreparing
               ? "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
               : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400"
           }`}
         >
-          {isComplete ? "Ready" : isError ? "Error" : preparing ? "Processing" : "Not started"}
+          {isComplete ? "Ready" : isError ? "Error" : isPreparing ? "Processing" : "Not started"}
         </span>
       </div>
     </aside>

@@ -1,20 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 function generateId(): string {
   return "ui_" + Math.random().toString(36).substring(2, 15);
 }
 
-export function useSession() {
-  const [sessionId, setSessionIdState] = useState<string>("");
+function getInitialSessionId(): string {
+  const id = localStorage.getItem("session_id");
+  if (id) return id;
+  const newId = generateId();
+  localStorage.setItem("session_id", newId);
+  return newId;
+}
 
-  useEffect(() => {
-    let id = localStorage.getItem("session_id");
-    if (!id) {
-      id = generateId();
-      localStorage.setItem("session_id", id);
-    }
-    setSessionIdState(id);
-  }, []);
+export function useSession() {
+  const [sessionId, setSessionIdState] = useState<string>(getInitialSessionId);
 
   const setSessionId = (id: string) => {
     localStorage.setItem("session_id", id);
