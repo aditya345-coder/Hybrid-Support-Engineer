@@ -7,8 +7,7 @@ interface Props {
 }
 
 export function AuthGate({ children }: Props) {
-  const { getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect, logout, user } =
-    useAuth0();
+  const { getAccessTokenSilently, isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
   const [authError, setAuthError] = useState<string | null>(null);
   const [tokenError, setTokenError] = useState(false);
 

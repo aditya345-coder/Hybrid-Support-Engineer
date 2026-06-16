@@ -15,10 +15,10 @@ interface Props {
 }
 
 function AuthSection() {
-  if (!isAuthConfigured()) return null;
-
   const { loginWithRedirect, logout, isAuthenticated, user } = useAuth0();
   const [authError, setAuthError] = useState<string | null>(null);
+
+  if (!isAuthConfigured()) return null;
 
   if (!isAuthenticated) {
     return (

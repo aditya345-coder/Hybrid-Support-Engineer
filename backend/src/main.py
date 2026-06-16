@@ -23,7 +23,7 @@ from config import RAW_DOCS_DIR
 
 from agents.support_agent import SupportAgent
 from database.redis_store import get_redis_store
-from middleware.rate_limit import check_rate_limit, decrement_rate_limit, check_rate_limit_namespace
+from middleware.rate_limit import check_rate_limit, decrement_rate_limit
 from middleware.feedback import FeedbackStore
 from middleware.auth import get_current_user
 from middleware.webhook_handler import handle_push, handle_issue_event, handle_pr_event
