@@ -144,7 +144,7 @@ class DocsLoader:
         else:
             try:
                 contents = repo.get_contents("")
-                for item in contents:
+                for item in ([contents] if not isinstance(contents, list) else contents):
                     if item.name.endswith(".md") and item.type == "file":
                         content = item.decoded_content.decode("utf-8")
                         md_files.append({
@@ -278,7 +278,7 @@ class DocsLoader:
         threshold = 0.5
 
         for name, feat_vec in self._feature_embeddings:
-            feat_vec = np.array(feat_vec)
+            feat_vec = np.array(feat_vec)  # type: ignore[assignment]
             cos_sim = np.dot(text_vec, feat_vec) / (
                 np.linalg.norm(text_vec) * np.linalg.norm(feat_vec)
             )

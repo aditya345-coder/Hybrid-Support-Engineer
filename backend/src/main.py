@@ -231,7 +231,7 @@ async def solve_ticket(
                     "message": "Repository is not prepared for this session_id. Call /v1/prepare-repo first.",
                     "metadata": {"session_id": session_id},
                 }
-        initial_state = {
+        initial_state: dict[str, Any] = {
             "query": request.user_query,
             "original_query": request.user_query,
             "rewritten_query": "",

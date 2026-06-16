@@ -232,7 +232,7 @@ class VectorStore:
             FieldCondition(key=k, match=MatchValue(value=v))
             for k, v in metadata_filter.items()
         ]
-        q_filter = Filter(must=conditions) if conditions else None
+        q_filter = Filter(must=list(conditions)) if conditions else None
         if q_filter is None:
             return
 

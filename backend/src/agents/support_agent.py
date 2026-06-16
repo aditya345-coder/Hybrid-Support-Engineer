@@ -79,7 +79,7 @@ class SupportAgent:
 
         if cp_type == "sqlite":
             try:
-                from langgraph.checkpoint.sqlite import SqliteSaver
+                from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore[import-not-found]
                 os.makedirs("data", exist_ok=True)
                 conn = sqlite3.connect(
                     settings.SQLITE_PATH,
@@ -93,7 +93,7 @@ class SupportAgent:
 
         elif cp_type == "postgres":
             try:
-                from langgraph.checkpoint.postgres import PostgresSaver
+                from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore[import-not-found]
                 conn_string = settings.POSTGRES_URI or ""
                 if not conn_string:
                     logger.warning("POSTGRES_URI not set, falling back to MemorySaver")

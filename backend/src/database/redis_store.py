@@ -156,12 +156,13 @@ class RedisStore:
 
             result: SessionData = {}
             for k, v in data.items():
-                if k == "completed_phases":
-                    result[k] = json.loads(v) if v else []
-                elif k == "percent":
-                    result[k] = v
-                else:
-                    result[k] = v
+                key = k.decode() if isinstance(k, bytes) else k
+                val = v.decode() if isinstance(v, bytes) else v
+                if key == "completed_phases":
+                    result["completed_phases"] = json.loads(val) if val else []
+                elif key in ("session_id", "repo_url", "stage", "current_phase",
+                             "percent", "message", "created_at", "updated_at"):
+                    result[key] = val  # type: ignore[literal-required]
             return result
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for get_session: %s", e)
@@ -196,7 +197,7 @@ class RedisStore:
             from datetime import datetime
             mapping = {"stage": stage, "updated_at": datetime.now().isoformat()}
             mapping.update({k: str(v) for k, v in fields.items()})
-            await client.hset(key, mapping=mapping)
+            await client.hset(key, mapping=mapping)  # type: ignore[arg-type]
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for update_session_stage: %s", e)
             self._last_error_time = time.monotonic()
@@ -213,7 +214,7 @@ class RedisStore:
             mapping = {"updated_at": datetime.now().isoformat()}
             for k, v in fields.items():
                 mapping[k] = json.dumps(v) if isinstance(v, list) else str(v)
-            await client.hset(key, mapping=mapping)
+            await client.hset(key, mapping=mapping)  # type: ignore[arg-type]
         except (redis.ConnectionError, redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for update_session_fields: %s", e)
             self._last_error_time = time.monotonic()
@@ -366,10 +367,13 @@ class RedisStore:
                 return None
             result: SessionData = {}
             for k, v in data.items():
-                if k == "completed_phases":
-                    result[k] = json.loads(v) if v else []
-                else:
-                    result[k] = v
+                key = k.decode() if isinstance(k, bytes) else k
+                val = v.decode() if isinstance(v, bytes) else v
+                if key == "completed_phases":
+                    result["completed_phases"] = json.loads(val) if val else []
+                elif key in ("session_id", "repo_url", "stage", "current_phase",
+                             "percent", "message", "created_at", "updated_at"):
+                    result[key] = val  # type: ignore[literal-required]
             return result
         except (sync_redis.ConnectionError, sync_redis.TimeoutError, ValueError) as e:
             logger.warning("Redis unavailable for get_session_sync: %s", e)
