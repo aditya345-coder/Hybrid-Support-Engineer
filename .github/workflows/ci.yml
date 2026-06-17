@@ -28,7 +28,7 @@ jobs:
         run: ruff check backend/src/
 
       - name: Type check with Mypy
-        run: mypy backend/src/
+        run: cd backend && mypy src/
 
       - name: Run Unit Tests with Pytest
         run: pytest backend/tests/

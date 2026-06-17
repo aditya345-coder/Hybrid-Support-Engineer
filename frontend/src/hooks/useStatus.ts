@@ -2,12 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { getStatus } from "../api/client";
 import type { StatusResponse } from "../api/client";
 
-export function useStatus(sessionId: string, enabled: boolean) {
+export function useStatus(sessionId: string) {
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const intervalRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!enabled || !sessionId || typeof sessionId !== "string") return;
+    if (!sessionId || typeof sessionId !== "string") return;
 
     const poll = async () => {
       try {
@@ -27,7 +27,7 @@ export function useStatus(sessionId: string, enabled: boolean) {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [sessionId, enabled]);
+  }, [sessionId]);
 
   return status;
 }

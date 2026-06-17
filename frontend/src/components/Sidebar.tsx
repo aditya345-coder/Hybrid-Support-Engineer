@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
-import { prepareRepo, resumeRepo, freshRepo, getStatus, cleanupSession, getRepoList, saveRepoListAPI } from "../api/client";
+import { prepareRepo, resumeRepo, freshRepo, cleanupSession, getRepoList, saveRepoListAPI } from "../api/client";
 import type { RepoEntry } from "../api/client";
 import { useStatus } from "../hooks/useStatus";
 import { isAuthConfigured } from "../auth/config";
@@ -89,50 +89,41 @@ function generateId(): string {
 
 export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, onThemeToggle }: Props) {
   const [repoUrl, setRepoUrl] = useState("");
-  const preparingRef = useRef(false);
   const [showResumeDialog, setShowResumeDialog] = useState(false);
   const [interruptedSession, setInterruptedSession] = useState<{ completed_phases: string[]; percent?: number } | null>(null);
   const [repoList, setRepoList] = useState<RepoEntry[]>(loadRepoList);
 
-  const status = useStatus(sessionId, preparingRef.current);
+  const status = useStatus(sessionId);
+  const stage = status?.data?.stage;
+  const isPreparing = stage === "running";
 
-  const isPreparing = useMemo(
-    () => preparingRef.current && status?.data?.stage !== "complete" && status?.data?.stage !== "error",
-    [status?.data?.stage],
-  );
-
+  // Sync repo URL, migration, and resume detection from status
   useEffect(() => {
-    if (!sessionId || typeof sessionId !== "string") return;
-    getStatus(sessionId)
-      .then((result) => {
-        if (result.status !== "ok" || !result.data) return;
-        if (result.data.repo_url) {
-          setRepoUrl(result.data.repo_url);
-          onRepoUrlChange(result.data.repo_url);
-          // Migration: if this session isn't in repo_list, add it
-          const currentList = loadRepoList();
-          if (!currentList.some((r) => r.sessionId === sessionId)) {
-            const name = repoNameFromUrl(result.data.repo_url);
-            const updated = [...currentList, {
-              sessionId,
-              repoUrl: result.data.repo_url,
-              name,
-              preparedAt: new Date().toISOString(),
-            }];
-            setRepoList(updated);
-            saveRepoList(updated);
-          }
-        }
-        if (result.data.stage === "running") {
-          setInterruptedSession({
-            completed_phases: result.data.completed_phases || [],
-            percent: result.data.percent,
-          });
-          setShowResumeDialog(true);
-        }
-      })
-      .catch(() => {});
-  }, [sessionId, onRepoUrlChange]);
+    if (!status?.data) return;
+    if (status.data.repo_url) {
+      setRepoUrl(status.data.repo_url);
+      onRepoUrlChange(status.data.repo_url);
+      const currentList = loadRepoList();
+      if (!currentList.some((r) => r.sessionId === sessionId)) {
+        const name = repoNameFromUrl(status.data.repo_url);
+        const updated = [...currentList, {
+          sessionId,
+          repoUrl: status.data.repo_url,
+          name,
+          preparedAt: new Date().toISOString(),
+        }];
+        setRepoList(updated);
+        saveRepoList(updated);
+      }
+    }
+    if (status.data.stage === "running") {
+      setInterruptedSession({
+        completed_phases: status.data.completed_phases || [],
+        percent: status.data.percent,
+      });
+      setShowResumeDialog(true);
+    }
+  }, [status?.data, sessionId, onRepoUrlChange]);
 
   // Sync repo list from backend on mount
   useEffect(() => {
@@ -160,7 +151,6 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
         setShowResumeDialog(true);
         return;
       }
-      preparingRef.current = true;
       const name = repoNameFromUrl(repoUrl.trim());
       const updated = repoList.filter((r) => r.sessionId !== sessionId);
       updated.push({ sessionId, repoUrl: repoUrl.trim(), name, preparedAt: new Date().toISOString() });
@@ -168,27 +158,26 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
       saveRepoList(updated);
       saveRepoListAPI(updated).catch(() => {});
     } catch {
-      preparingRef.current = false;
+      // API call failed — status will remain undefined, isPreparing stays true briefly
+      // but useStatus will clear it on next poll
     }
   };
 
   const handleResume = async () => {
     setShowResumeDialog(false);
-    preparingRef.current = true;
     try {
       await resumeRepo(sessionId);
     } catch {
-      preparingRef.current = false;
+      // status-based isPreparing handles UI state
     }
   };
 
   const handleFresh = async () => {
     setShowResumeDialog(false);
-    preparingRef.current = true;
     try {
       await freshRepo(repoUrl.trim(), sessionId);
     } catch {
-      preparingRef.current = false;
+      // status-based isPreparing handles UI state
     }
   };
 
@@ -230,7 +219,6 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
     onRepoUrlChange(url);
   };
 
-  const stage = status?.data?.stage;
   const isComplete = stage === "complete";
   const isError = stage === "error";
 
