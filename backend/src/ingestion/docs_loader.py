@@ -395,7 +395,7 @@ class DocsLoader:
                 except Exception:
                     pass
 
-            base_dir, include_files = self.discover_docs_path(self.local_path)
+            base_dir, include_files = self.discover_docs_path(str(self.local_path))
 
             files_to_process: list[tuple[str, str]] = []
             if include_files:

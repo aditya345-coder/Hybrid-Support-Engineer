@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 from neo4j import GraphDatabase
 
@@ -47,7 +47,7 @@ class GraphStore:
         """
         try:
             with self.driver.session() as session:
-                params = {"neo4j_id": neo4j_id, "limit": limit}
+                params: dict[str, Any] = {"neo4j_id": neo4j_id, "limit": limit}
                 if session_id:
                     params["session_id"] = session_id
                 result = session.run(query, **params)
@@ -79,7 +79,7 @@ class GraphStore:
         """
         try:
             with self.driver.session() as session:
-                params = {"feature_name": feature_name, "limit": limit}
+                params: dict[str, Any] = {"feature_name": feature_name, "limit": limit}
                 if session_id:
                     params["session_id"] = session_id
                 result = session.run(query, **params)
@@ -134,7 +134,7 @@ class GraphStore:
         """
         try:
             with self.driver.session() as session:
-                params = {"keyword": keyword, "limit": limit}
+                params: dict[str, Any] = {"keyword": keyword, "limit": limit}
                 if session_id:
                     params["session_id"] = session_id
                 result = session.run(query, **params)

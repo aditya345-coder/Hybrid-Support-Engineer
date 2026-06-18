@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useAuth0 } from "@auth0/auth0-react";
 import { prepareRepo, resumeRepo, freshRepo, cleanupSession, getRepoList, saveRepoListAPI } from "../api/client";
 import type { RepoEntry } from "../api/client";
@@ -97,11 +97,16 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
   const stage = status?.data?.stage;
   const isPreparing = stage === "running";
 
-  // Sync repo URL, migration, and resume detection from status
+  const statusRepoUrl = status?.data?.repo_url ?? "";
+  const effectiveRepoUrl = useMemo(
+    () => repoUrl || statusRepoUrl,
+    [repoUrl, statusRepoUrl],
+  );
+
+  // Sync migration and resume detection from status
   useEffect(() => {
     if (!status?.data) return;
     if (status.data.repo_url) {
-      setRepoUrl(status.data.repo_url);
       onRepoUrlChange(status.data.repo_url);
       const currentList = loadRepoList();
       if (!currentList.some((r) => r.sessionId === sessionId)) {
@@ -112,16 +117,19 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
           name,
           preparedAt: new Date().toISOString(),
         }];
-        setRepoList(updated);
         saveRepoList(updated);
+        // Use queueMicrotask to avoid synchronous setState in effect
+        queueMicrotask(() => setRepoList(updated));
       }
     }
     if (status.data.stage === "running") {
-      setInterruptedSession({
-        completed_phases: status.data.completed_phases || [],
-        percent: status.data.percent,
+      queueMicrotask(() => {
+        setInterruptedSession({
+          completed_phases: status.data.completed_phases || [],
+          percent: status.data.percent,
+        });
+        setShowResumeDialog(true);
       });
-      setShowResumeDialog(true);
     }
   }, [status?.data, sessionId, onRepoUrlChange]);
 
@@ -215,6 +223,7 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
   };
 
   const handleRepoUrlInput = (url: string) => {
+    userEditedRef.current = true;
     setRepoUrl(url);
     onRepoUrlChange(url);
   };
@@ -284,7 +293,7 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
         <label className="text-sm text-gray-600 dark:text-gray-400">Repo URL</label>
         <input
           type="text"
-          value={repoUrl}
+          value={effectiveRepoUrl}
           onChange={(e) => handleRepoUrlInput(e.target.value)}
           placeholder="owner/repo"
           disabled={isPreparing}

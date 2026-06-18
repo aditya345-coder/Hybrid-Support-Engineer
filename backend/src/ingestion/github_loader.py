@@ -167,7 +167,7 @@ class GitHubGraphLoader:
             )
 
     def run(self):
-        issues = list(self.repo.get_issues(state="closed")[:settings.MAX_ISSUES_FETCHED])
+        issues: list = list(self.repo.get_issues(state="closed")[:settings.MAX_ISSUES_FETCHED])
         total = len(issues)
         self._progress("building_graph", 0, max(1, total), f"Processing GitHub issues (0/{total})")
 

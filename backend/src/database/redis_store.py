@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from datetime import date
-from typing import TypedDict
+from typing import Any, TypedDict
 
 import redis.asyncio as redis
 
@@ -81,6 +81,7 @@ class RedisStore:
 
     def __init__(self) -> None:
         self._client: redis.Redis | None = None
+        self._sync_client: Any = None
         self._lock = threading.Lock()
         self._available = True
         self._last_error_time: float = 0.0

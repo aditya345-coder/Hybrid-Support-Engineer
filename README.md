@@ -33,8 +33,8 @@ The system follows a multi-layered agentic architecture built with **LangGraph**
 
 ### 2. Clone and Install
 ```bash
-git clone https://github.com/your-username/The-Knowledge-Graph-Support-Engineer.git
-cd The-Knowledge-Graph-Support-Engineer
+git clone https://github.com/aditya345-coder/Hybrid-Support-Engineer.git
+cd Hybrid-Support-Engineer
 
 # Install dependencies
 pip install -e backend/

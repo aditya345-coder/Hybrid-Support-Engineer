@@ -98,7 +98,7 @@ class SupportAgent:
                 if not conn_string:
                     logger.warning("POSTGRES_URI not set, falling back to MemorySaver")
                 else:
-                    checkpointer = PostgresSaver.from_conn_string(conn_string)
+                    checkpointer = PostgresSaver.from_conn_string(conn_string)  # type: ignore[assignment]
                     logger.info("Checkpointer: PostgreSQL")
                     return checkpointer
             except ImportError:
@@ -395,7 +395,7 @@ class SupportAgent:
     def prune_history(self, session_id: str, max_turns: int = 10) -> None:
         config = {"configurable": {"thread_id": session_id or "default"}}
         try:
-            history = list(self.app.get_state_history(config, limit=max_turns * 2))
+            history = list(self.app.get_state_history(config, limit=max_turns * 2))  # type: ignore[arg-type]  # LangGraph accepts dict at runtime
             complete = [h for h in history if h.values.get("response")]
             if len(complete) > max_turns:
                 checkpointer = getattr(self.app, "checkpointer", None)

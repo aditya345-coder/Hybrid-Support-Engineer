@@ -92,8 +92,8 @@ def run_evaluation():
     scores = evaluate(
         dataset=eval_dataset,
         metrics=[f, ar, cp],
-        llm=evaluator_llm,        # Global fallback LLM
-        embeddings=embeddings     # Global fallback Embeddings
+        llm=evaluator_llm,  # type: ignore[arg-type]  # ragas type mismatch with llm_factory
+        embeddings=embeddings
     )
     print(scores)
 
