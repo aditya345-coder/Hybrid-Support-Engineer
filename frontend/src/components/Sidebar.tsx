@@ -123,10 +123,11 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
       }
     }
     if (status.data.stage === "running") {
+      const data = status.data;
       queueMicrotask(() => {
         setInterruptedSession({
-          completed_phases: status.data.completed_phases || [],
-          percent: status.data.percent,
+          completed_phases: data.completed_phases || [],
+          percent: data.percent,
         });
         setShowResumeDialog(true);
       });
@@ -223,7 +224,6 @@ export function Sidebar({ sessionId, onSessionChange, onRepoUrlChange, theme, on
   };
 
   const handleRepoUrlInput = (url: string) => {
-    userEditedRef.current = true;
     setRepoUrl(url);
     onRepoUrlChange(url);
   };
