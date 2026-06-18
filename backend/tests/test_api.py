@@ -1,5 +1,5 @@
 from fastapi.testclient import TestClient
-from src.main import app
+from main import app
 from middleware.auth import get_current_user
 
 app.dependency_overrides[get_current_user] = lambda: {"sub": "anonymous", "permissions": []}
