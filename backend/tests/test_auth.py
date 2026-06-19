@@ -57,23 +57,31 @@ def test_auth_error_exception():
 
 def test_jwks_network_error_returns_401():
     from jwt import PyJWKClientError
-    with patch("middleware.auth.PyJWKClient") as mock_client_cls:
-        mock_client = MagicMock()
-        mock_client_cls.return_value = mock_client
-        mock_client.get_signing_key_from_jwt.side_effect = PyJWKClientError("Connection refused")
-        from middleware.auth import decode_jwt
-        with pytest.raises(AuthError) as excinfo:
-            decode_jwt("some.token.here")
-        assert excinfo.value.status_code == 401
+    with patch("middleware.auth.settings") as mock_settings:
+        mock_settings.AUTH_ENABLED = True
+        mock_settings.AUTH0_DOMAIN = "test.auth0.com"
+        mock_settings.AUTH0_AUDIENCE = "https://api.test.com"
+        with patch("middleware.auth.PyJWKClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.get_signing_key_from_jwt.side_effect = PyJWKClientError("Connection refused")
+            from middleware.auth import decode_jwt
+            with pytest.raises(AuthError) as excinfo:
+                decode_jwt("some.token.here")
+            assert excinfo.value.status_code == 401
 
 
 def test_jwks_timeout_error_returns_401():
     from jwt import PyJWKClientError
-    with patch("middleware.auth.PyJWKClient") as mock_client_cls:
-        mock_client = MagicMock()
-        mock_client_cls.return_value = mock_client
-        mock_client.get_signing_key_from_jwt.side_effect = PyJWKClientError("Timeout")
-        from middleware.auth import decode_jwt
-        with pytest.raises(AuthError) as excinfo:
-            decode_jwt("some.token.here")
-        assert excinfo.value.status_code == 401
+    with patch("middleware.auth.settings") as mock_settings:
+        mock_settings.AUTH_ENABLED = True
+        mock_settings.AUTH0_DOMAIN = "test.auth0.com"
+        mock_settings.AUTH0_AUDIENCE = "https://api.test.com"
+        with patch("middleware.auth.PyJWKClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client_cls.return_value = mock_client
+            mock_client.get_signing_key_from_jwt.side_effect = PyJWKClientError("Timeout")
+            from middleware.auth import decode_jwt
+            with pytest.raises(AuthError) as excinfo:
+                decode_jwt("some.token.here")
+            assert excinfo.value.status_code == 401
