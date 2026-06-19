@@ -96,8 +96,12 @@ def _release_session_lock(session_id: str) -> None:
         _session_locks.pop(session_id, None)
 
 logger.info("Initializing SupportAgent...")
-agent: Any = SupportAgent()
-logger.info("SupportAgent initialized successfully.")
+try:
+    agent: Any = SupportAgent()
+    logger.info("SupportAgent initialized successfully.")
+except Exception as e:
+    logger.warning("SupportAgent init failed (external services unavailable): %s", e)
+    agent = None
 
 # Startup security check
 env = os.getenv("ENV", "development").lower()
@@ -200,6 +204,8 @@ async def solve_ticket(
     user: dict = Depends(get_current_user),
     x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
 ):
+    if agent is None:
+        raise HTTPException(status_code=503, detail="Agent not initialized — external services unavailable")
     try:
         # Running our LangGraph State Machine
         logger.info("Solving ticket", extra={"query": request.user_query})

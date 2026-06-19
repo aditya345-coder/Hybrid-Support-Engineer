@@ -2,10 +2,10 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-COPY backend/pyproject.toml backend/requirements.txt ./
-RUN pip install --no-cache-dir -e ".[dev]"
-
 COPY backend/src ./src
+COPY backend/pyproject.toml ./
+
+RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 

@@ -3,12 +3,12 @@ from unittest.mock import patch
 
 def test_solve_ticket_uses_user_sub_for_rate_limit():
     """Verify solve_ticket passes user sub to check_rate_limit."""
-    from src.main import app
+    from main import app
     from middleware.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: {"sub": "auth0|user123", "permissions": []}
 
-    with patch("src.main.check_rate_limit") as mock_check:
+    with patch("main.check_rate_limit") as mock_check:
         mock_check.return_value = True
         from fastapi.testclient import TestClient
         client = TestClient(app)
@@ -24,12 +24,12 @@ def test_solve_ticket_uses_user_sub_for_rate_limit():
 
 def test_solve_ticket_uses_anonymous_when_no_sub():
     """When auth returns no 'sub', fallback to 'anonymous'."""
-    from src.main import app
+    from main import app
     from middleware.auth import get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: {"permissions": []}
 
-    with patch("src.main.check_rate_limit") as mock_check:
+    with patch("main.check_rate_limit") as mock_check:
         mock_check.return_value = True
         from fastapi.testclient import TestClient
         client = TestClient(app)

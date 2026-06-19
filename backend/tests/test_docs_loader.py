@@ -4,13 +4,13 @@ from settings import settings
 
 class TestFileLimitEnforcement:
     def test_file_limit_respected(self):
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         DocsLoader()
         files = [(f"path/to/doc{i}.md", f"doc{i}.md") for i in range(settings.REPO_FILE_LIMIT)]
         assert len(files) <= settings.REPO_FILE_LIMIT
 
     def test_file_limit_exceeded_raises(self):
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
 
         class TestLoader(DocsLoader):
             def load_and_split(self):
@@ -32,7 +32,7 @@ class TestFileLimitEnforcement:
 class TestLocalModeBranching:
     def test_local_mode_true_calls_clone_path(self, monkeypatch):
         monkeypatch.setattr(settings, "LOCAL_MODE", True)
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
 
         loader = DocsLoader(repo_url="owner/repo")
         # Mock prepare_local_repo to avoid network calls
@@ -45,7 +45,7 @@ class TestLocalModeBranching:
 
     def test_local_mode_false_uses_api(self, monkeypatch):
         monkeypatch.setattr(settings, "LOCAL_MODE", False)
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
 
         loader = DocsLoader(repo_url="owner/repo")
         # Mock fetch_via_api to avoid network
@@ -56,24 +56,24 @@ class TestLocalModeBranching:
 
 class TestFetchViaApi:
     def test_repo_owner_name_from_url(self):
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         loader = DocsLoader(repo_url="https://github.com/owner/repo.git")
         assert loader._repo_owner_name() == "owner/repo"
 
     def test_repo_owner_name_from_short(self):
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         loader = DocsLoader(repo_url="owner/repo")
         assert loader._repo_owner_name() == "owner/repo"
 
     def test_repo_owner_name_empty_fallback(self):
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         loader = DocsLoader()
         # Falls back to settings.TARGET_REPO which might be None
         result = loader._repo_owner_name()
         assert result is not None or result == ""
 
     def test_repo_owner_name_from_nested_url(self):
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         loader = DocsLoader(repo_url="https://github.com/org/team/repo.git")
         assert loader._repo_owner_name() == "team/repo"
 
@@ -81,12 +81,12 @@ class TestFetchViaApi:
 class TestDocsLoaderInit:
     def test_github_token_from_settings(self, monkeypatch):
         monkeypatch.setattr(settings, "GITHUB_TOKEN", "ghp_test_token")
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         loader = DocsLoader(repo_url="owner/repo")
         assert loader.github_token == "ghp_test_token"
 
     def test_github_token_from_param_overrides_settings(self, monkeypatch):
         monkeypatch.setattr(settings, "GITHUB_TOKEN", "ghp_default")
-        from src.ingestion.docs_loader import DocsLoader
+        from ingestion.docs_loader import DocsLoader
         loader = DocsLoader(repo_url="owner/repo", github_token="ghp_explicit")
         assert loader.github_token == "ghp_explicit"
