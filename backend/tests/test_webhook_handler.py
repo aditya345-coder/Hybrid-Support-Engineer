@@ -25,7 +25,7 @@ def test_handle_push_extracts_md_files():
     }
 
     with (
-        patch("middleware.webhook_handler.VectorStore") as mock_vs,
+        patch("database.vector_store.VectorStore") as mock_vs,
         patch("middleware.webhook_handler._download_raw_file") as mock_download,
         patch("middleware.webhook_handler._split_markdown") as mock_split,
         patch("middleware.webhook_handler._embed_and_upsert"),
@@ -64,7 +64,7 @@ def test_handle_push_no_md_files():
     }
 
     with (
-        patch("middleware.webhook_handler.VectorStore") as mock_vs,
+        patch("database.vector_store.VectorStore") as mock_vs,
         patch("middleware.webhook_handler._download_raw_file") as mock_download,
     ):
         handle_push(payload, session_id="test-session")
@@ -87,7 +87,7 @@ def test_handle_issue_event_upserts_issue():
         },
     }
 
-    with patch("middleware.webhook_handler.GraphStore") as mock_gs:
+    with patch("database.graph_store.GraphStore") as mock_gs:
         handle_issue_event(payload, session_id="test-session")
 
         mock_gs.return_value.upsert_issue.assert_called_once()
@@ -108,7 +108,7 @@ def test_handle_issue_event_deleted_skipped():
         "issue": {"number": 999, "title": "Spam issue"},
     }
 
-    with patch("middleware.webhook_handler.GraphStore") as mock_gs:
+    with patch("database.graph_store.GraphStore") as mock_gs:
         handle_issue_event(payload, session_id="test-session")
         mock_gs.return_value.upsert_issue.assert_not_called()
 
@@ -134,7 +134,7 @@ def test_handle_pr_event_merged():
     }
 
     with (
-        patch("middleware.webhook_handler.GraphStore") as mock_gs,
+        patch("database.graph_store.GraphStore") as mock_gs,
         patch("middleware.webhook_handler.requests.get"),
     ):
         handle_pr_event(payload, session_id="test-session")
@@ -164,6 +164,6 @@ def test_handle_pr_event_not_merged_skipped():
         },
     }
 
-    with patch("middleware.webhook_handler.GraphStore") as mock_gs:
+    with patch("database.graph_store.GraphStore") as mock_gs:
         handle_pr_event(payload, session_id="test-session")
         mock_gs.return_value.upsert_pr.assert_not_called()

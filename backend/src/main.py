@@ -16,17 +16,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Any, Callable, cast
 
-from ingestion.docs_loader import DocsLoader
-from ingestion.github_loader import GitHubGraphLoader
-
 from config import RAW_DOCS_DIR
 
-from agents.support_agent import SupportAgent
 from database.redis_store import get_redis_store
 from middleware.rate_limit import check_rate_limit, decrement_rate_limit
 from middleware.feedback import FeedbackStore
 from middleware.auth import get_current_user
-from middleware.webhook_handler import handle_push, handle_issue_event, handle_pr_event
 from utils.logging_config import setup_logging
 from utils.validators import validate_session_id
 from settings import settings
@@ -95,13 +90,22 @@ def _release_session_lock(session_id: str) -> None:
     with _session_locks_lock:
         _session_locks.pop(session_id, None)
 
-logger.info("Initializing SupportAgent...")
-try:
-    agent: Any = SupportAgent()
-    logger.info("SupportAgent initialized successfully.")
-except Exception as e:
-    logger.warning("SupportAgent init failed (external services unavailable): %s", e)
-    agent = None
+_agent: Any = None
+
+
+def _get_agent() -> Any:
+    """Lazy-initialize SupportAgent on first use."""
+    global _agent
+    if _agent is None:
+        from agents.support_agent import SupportAgent
+        logger.info("Initializing SupportAgent...")
+        try:
+            _agent = SupportAgent()
+            logger.info("SupportAgent initialized successfully.")
+        except Exception as e:
+            logger.warning("SupportAgent init failed (external services unavailable): %s", e)
+            raise
+    return _agent
 
 # Startup security check
 env = os.getenv("ENV", "development").lower()
@@ -186,6 +190,8 @@ async def github_webhook(
 
     logger.info("Webhook received", extra={"event": event, "session_id": session_id})
 
+    from middleware.webhook_handler import handle_push, handle_issue_event, handle_pr_event
+
     if event == "push":
         background_tasks.add_task(handle_push, payload, session_id)
     elif event == "issues":
@@ -204,7 +210,9 @@ async def solve_ticket(
     user: dict = Depends(get_current_user),
     x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
 ):
-    if agent is None:
+    try:
+        current_agent = _get_agent()
+    except Exception:
         raise HTTPException(status_code=503, detail="Agent not initialized — external services unavailable")
     try:
         # Running our LangGraph State Machine
@@ -228,7 +236,7 @@ async def solve_ticket(
         # If a session_id is provided, require that the repo was prepared (docs collection exists).
         if session_id:
             try:
-                ready = agent.retriever.vector_store.has_session_collection(session_id)
+                ready = current_agent.retriever.vector_store.has_session_collection(session_id)
             except Exception:
                 ready = False
             if not ready:
@@ -255,9 +263,9 @@ async def solve_ticket(
             "allow_web_search": bool(request.allow_web_search),
         }
         config = {"configurable": {"thread_id": session_id or "default"}}
-        result = cast(Any, agent.app).invoke(initial_state, config=config)
+        result = cast(Any, current_agent.app).invoke(initial_state, config=config)
 
-        agent.prune_history(session_id or "default")
+        current_agent.prune_history(session_id or "default")
 
         return {
             "status": "success",
@@ -394,6 +402,9 @@ def _prepare_repo_task(
         return
 
     try:
+        from ingestion.docs_loader import DocsLoader
+        from ingestion.github_loader import GitHubGraphLoader
+
         # Get or initialize completed phases list
         if completed_phases is None:
             completed_phases = []
@@ -511,7 +522,7 @@ def _prepare_repo_task(
             if code_chunks:
                 _index_code_chunks(
                     code_chunks, session_id, report,
-                    vector_store=agent.retriever.vector_store,
+                    vector_store=_get_agent().retriever.vector_store,
                 )
             completed_phases.append("indexing_code")
             redis_store.mark_phase_complete_sync(session_id, "indexing_code")
@@ -645,13 +656,15 @@ async def _cleanup_session_data(session_id: str) -> None:
 
     # 2. Delete Qdrant collections
     try:
-        agent.retriever.vector_store.cleanup_session(session_id)
+        current_agent = _get_agent()
+        current_agent.retriever.vector_store.cleanup_session(session_id)
     except Exception as e:
         logger.warning("Qdrant cleanup failed: %s", e)
 
     # 3. Delete Neo4j session nodes
     try:
-        agent.retriever.graph_store.cleanup_session(session_id)
+        current_agent = _get_agent()
+        current_agent.retriever.graph_store.cleanup_session(session_id)
     except Exception as e:
         logger.warning("Neo4j cleanup failed: %s", e)
 
@@ -759,8 +772,9 @@ async def _cleanup_orphaned_sessions() -> int:
     Returns the number of orphaned sessions cleaned."""
     cleaned = 0
     try:
+        current_agent = _get_agent()
         # Scan Qdrant collections for docs_{sid} and code_{sid} patterns
-        collections = agent.retriever.vector_store.client.get_collections().collections
+        collections = current_agent.retriever.vector_store.client.get_collections().collections
         for col in collections:
             name = col.name
             sid = None
@@ -771,12 +785,12 @@ async def _cleanup_orphaned_sessions() -> int:
             if sid and not await redis_store.get_session(sid):
                 logger.info("Cleaning orphaned Qdrant collection", extra={"collection": name, "session_id": sid})
                 try:
-                    agent.retriever.vector_store.client.delete_collection(name)
+                    current_agent.retriever.vector_store.client.delete_collection(name)
                 except Exception as e:
                     logger.warning("Failed to delete orphaned Qdrant collection %s: %s", name, e)
                 # Also clean Neo4j and disk for this session
                 try:
-                    agent.retriever.graph_store.cleanup_session(sid)
+                    current_agent.retriever.graph_store.cleanup_session(sid)
                 except Exception as e:
                     logger.warning("Failed to clean orphaned Neo4j data for %s: %s", sid, e)
                 repo_path = settings.RAW_DOCS_DIR / sid

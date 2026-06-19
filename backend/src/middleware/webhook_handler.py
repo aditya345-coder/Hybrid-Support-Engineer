@@ -2,14 +2,9 @@ import hashlib
 import os
 import re
 import requests
+from typing import Any
 
-from langchain_text_splitters import MarkdownHeaderTextSplitter
-
-from database.vector_store import VectorStore
-from database.graph_store import GraphStore
 from utils.logging_config import setup_logging
-
-from qdrant_client.models import PointStruct
 
 logger = setup_logging(__name__)
 
@@ -59,6 +54,8 @@ def _download_raw_file(owner: str, repo: str, branch: str, file_path: str) -> st
 
 def _split_markdown(content: str, source_label: str) -> list[dict]:
     """Split markdown content into chunks with metadata."""
+    from langchain_text_splitters import MarkdownHeaderTextSplitter
+
     headers_to_split_on = [
         ("#", "Header 1"),
         ("##", "Header 2"),
@@ -79,11 +76,13 @@ def _split_markdown(content: str, source_label: str) -> list[dict]:
 
 
 def _embed_and_upsert(
-    vector_store: VectorStore,
+    vector_store: Any,
     chunks: list[dict],
     session_id: str | None,
 ) -> None:
     """Embed text chunks and upsert into Qdrant."""
+    from qdrant_client.models import PointStruct
+
     if not chunks:
         return
     texts = [c["text"] for c in chunks]
@@ -129,6 +128,8 @@ def _embed_and_upsert(
 
 def handle_push(payload: dict, session_id: str | None = None) -> None:
     """Re-index changed .md files from a push event."""
+    from database.vector_store import VectorStore
+
     owner, repo_name, branch, full_name = _parse_repo(payload)
     commits = payload.get("commits", [])
     changed_md_files: set[str] = set()
@@ -160,6 +161,8 @@ def handle_push(payload: dict, session_id: str | None = None) -> None:
 
 def handle_issue_event(payload: dict, session_id: str | None = None) -> None:
     """Update Neo4j graph when a GitHub issue is opened/closed/reopened/edited."""
+    from database.graph_store import GraphStore
+
     issue = payload.get("issue", {})
     if not issue:
         logger.warning("Issue event missing 'issue' field")
@@ -219,6 +222,8 @@ def _link_pr_to_issues(graph_store, pr_number: int, body: str, session_id: str |
 
 def handle_pr_event(payload: dict, session_id: str | None = None) -> None:
     """Update Neo4j graph when a PR is opened/closed/edited."""
+    from database.graph_store import GraphStore
+
     pr = payload.get("pull_request", {})
     if not pr:
         logger.warning("PR event missing 'pull_request' field")
